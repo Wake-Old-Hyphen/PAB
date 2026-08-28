@@ -1,0 +1,54 @@
+name: Morphe AutoBuilds
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *" 
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Decode Persistent Keystore
+        run: |
+          mkdir -p signing
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > signing/keystore.jks
+
+      - name: Run Build Script
+        run: python build.py
+
+      - name: Sign APKs
+        run: |
+          for apk in build/*-patched.apk; do
+            if [ -f "$apk" ]; then
+              zipalign -v -p 4 "$apk" "${apk%.*}_aligned.apk"
+              apksigner sign --ks signing/keystore.jks --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} --ks-key-alias ${{ secrets.KEY_ALIAS }} --key-pass pass:${{ secrets.KEY_PASSWORD }} --out "${apk%.*}_signed.apk" "${apk%.*}_aligned.apk"
+            fi
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: autobuild-${{ github.run_number }}
+          name: "AutoBuild ${{ github.run_number }}"
+          body_path: release_notes.md
+          files: build/*_signed.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
