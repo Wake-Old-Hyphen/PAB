@@ -68,7 +68,6 @@ def main():
 
     get_latest_cli_jar()
 
-    # Download ONLY dh6k patches directly from their GitHub releases page
     try:
         api_url = "https://api.github.com/repos/dh6k/morphe-patches/releases/latest"
         release = requests.get(api_url).json()
@@ -99,37 +98,35 @@ def main():
 
         out_apk = f"build/{variant['output_name']}-{tag}-patched.apk"
         
-        # Prepare options for patches that need them
-        options = [
-            {"patchName": "Change app icon", "options": [{"key": "customIcon", "value": "assets/isoamoledbraveicon.png"}]}
-        ]
-        
         included_patches = ["Brave origin", "Change app icon", "Disable analytics"]
         
         if variant.get('app_name'):
             included_patches.append("Change app name")
-            options.append({"patchName": "Change app name", "options": [{"key": "appName", "value": variant['app_name']}]})
             
         if variant.get('clone_package'):
             included_patches.append("Clone app")
-            options.append({"patchName": "Clone app", "options": [{"key": "packageName", "value": variant['clone_package']}]})
             
-        options_path = f"build/{variant['id']}_options.json"
-        with open(options_path, 'w') as f:
-            json.dump(options, f)
-            
-        # Pass ONLY the dh6k bundle to the CLI
+        # Build CLI Command
         cmd = [
             "java", "-jar", "build/cli.jar", "patch",
             "-p", "bundles/dh6k.mpp",
-            "--options-file", options_path,
             "-o", out_apk,
             "--continue-on-error",
             apk_path
         ]
         
+        # Enable selected patches
         for p in included_patches:
             cmd.extend(["-e", p])
+            
+        # Pass Options Directly via -O key=value (No JSON needed!)
+        cmd.extend(["-O", "customIcon=assets/isoamoledbraveicon.png"])
+        
+        if variant.get('app_name'):
+            cmd.extend(["-O", f"appName={variant['app_name']}"])
+            
+        if variant.get('clone_package'):
+            cmd.extend(["-O", f"packageName={variant['clone_package']}"])
             
         print("Running:", " ".join(cmd))
         try:
