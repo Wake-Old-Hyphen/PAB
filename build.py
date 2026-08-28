@@ -68,8 +68,7 @@ def main():
 
     get_latest_cli_jar()
 
-    download_file("https://revanced-external-bundles.brosssh.com/api/v2/bundle/MorpheApp/morphe-patches/latest?channel=prerelease", "bundles/official.mpp")
-    
+    # Download ONLY dh6k patches directly from their GitHub releases page
     try:
         api_url = "https://api.github.com/repos/dh6k/morphe-patches/releases/latest"
         release = requests.get(api_url).json()
@@ -79,11 +78,6 @@ def main():
                 break
     except Exception as e:
         print(f"Warning: Failed to download dh6k patches: {e}")
-
-    print("\n--- LISTING AVAILABLE PATCHES ---")
-    subprocess.run(["java", "-jar", "build/cli.jar", "list-patches", "--patches", "bundles/dh6k.mpp", "--with-packages", "--with-options"], check=False)
-    subprocess.run(["java", "-jar", "build/cli.jar", "list-patches", "--patches", "bundles/official.mpp", "--with-packages", "--with-options"], check=False)
-    print("--- END OF PATCH LIST ---\n")
 
     release_notes = "# Morphe AutoBuilds Release\n\n"
     
@@ -105,42 +99,37 @@ def main():
 
         out_apk = f"build/{variant['output_name']}-{tag}-patched.apk"
         
-        options = []
+        # Prepare options for patches that need them
+        options = [
+            {"patchName": "Change app icon", "options": [{"key": "customIcon", "value": "assets/isoamoledbraveicon.png"}]}
+        ]
         
-        def add_option(patch_name, key, value):
-            for patch in options:
-                if patch["patchName"] == patch_name:
-                    patch["options"].append({"key": key, "value": value})
-                    return
-            options.append({"patchName": patch_name, "options": [{"key": key, "value": value}]})
-
         included_patches = ["Brave origin", "Change app icon", "Disable analytics"]
-        add_option("Change app icon", "iconPath", "assets/isoamoledbraveicon.png")
         
         if variant.get('app_name'):
             included_patches.append("Change app name")
-            add_option("Change app name", "appName", variant['app_name'])
+            options.append({"patchName": "Change app name", "options": [{"key": "appName", "value": variant['app_name']}]})
             
         if variant.get('clone_package'):
             included_patches.append("Clone app")
-            add_option("Clone app", "packageName", variant['clone_package'])
+            options.append({"patchName": "Clone app", "options": [{"key": "packageName", "value": variant['clone_package']}]})
             
         options_path = f"build/{variant['id']}_options.json"
         with open(options_path, 'w') as f:
             json.dump(options, f)
             
+        # Pass ONLY the dh6k bundle to the CLI
         cmd = [
             "java", "-jar", "build/cli.jar", "patch",
-            "--patches", "bundles/dh6k.mpp",
-            "--patches", "bundles/official.mpp",
+            "-p", "bundles/dh6k.mpp",
             "--options-file", options_path,
-            "--out", out_apk,
+            "-o", out_apk,
             "--continue-on-error",
             apk_path
         ]
         
         for p in included_patches:
-            cmd.extend(["-i", p])
+            cmd.extend(["-e", p])
             
         print("Running:", " ".join(cmd))
         try:
