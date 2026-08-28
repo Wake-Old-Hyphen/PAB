@@ -68,13 +68,24 @@ def main():
 
     get_latest_cli_jar()
 
+    # Download dh6k patches (Includes Pre-releases!)
     try:
-        api_url = "https://api.github.com/repos/dh6k/morphe-patches/releases/latest"
-        release = requests.get(api_url).json()
-        for asset in release.get("assets", []):
-            if asset["name"].endswith(".mpp"):
-                download_file(asset["browser_download_url"], "bundles/dh6k.mpp")
+        api_url = "https://api.github.com/repos/dh6k/morphe-patches/releases"
+        releases = requests.get(api_url).json()
+        downloaded = False
+        for release in releases:
+            if release.get("draft"):
+                continue
+            for asset in release.get("assets", []):
+                if asset["name"].endswith(".mpp"):
+                    download_file(asset["browser_download_url"], "bundles/dh6k.mpp")
+                    print(f"Downloaded dh6k version: {release.get('tag_name')} (Prerelease: {release.get('prerelease')})")
+                    downloaded = True
+                    break
+            if downloaded:
                 break
+        if not downloaded:
+            raise Exception("No .mpp file found in dh6k releases")
     except Exception as e:
         print(f"Warning: Failed to download dh6k patches: {e}")
 
@@ -119,7 +130,7 @@ def main():
         for p in included_patches:
             cmd.extend(["-e", p])
             
-        # Pass Options Directly via -O key=value (No JSON needed!)
+        # Pass Options Directly via -O key=value
         cmd.extend(["-O", "customIcon=assets/isoamoledbraveicon.png"])
         
         if variant.get('app_name'):
