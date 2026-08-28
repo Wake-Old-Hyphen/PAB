@@ -3,8 +3,31 @@ import yaml
 import json
 import subprocess
 import requests
-import glob
-import re
+import shutil
+
+def get_latest_cli_jar():
+    """Downloads the latest morphe-desktop-*-all.jar"""
+    api_url = "https://api.github.com/repos/MorpheApp/morphe-desktop/releases/latest"
+    release = requests.get(api_url).json()
+    for asset in release.get("assets", []):
+        if asset["name"].endswith("-all.jar"):
+            url = asset["browser_download_url"]
+            print(f"Downloading CLI: {asset['name']}")
+            with requests.get(url, stream=True) as r:
+                r.raise_for_status()
+                with open("build/cli.jar", 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            return asset["name"]
+    raise Exception("Could not find morphe-desktop CLI jar")
+
+def download_file(url, dest):
+    print(f"Downloading {url} to {dest}...")
+    with requests.get(url, stream=True) as r:
+        r.raise_for_status()
+        with open(dest, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
 
 def get_github_release(repo, release_type):
     api_url = f"https://api.github.com/repos/{repo}/releases"
@@ -15,7 +38,6 @@ def get_github_release(repo, release_type):
         name = release.get("name", "").lower()
         is_prerelease = release.get("prerelease", False)
 
-        # Match the correct release type
         if release_type == "stable" and not is_prerelease:
             target = True
         elif release_type == "nightly" and is_prerelease and ("nightly" in tag or "nightly" in name):
@@ -27,42 +49,49 @@ def get_github_release(repo, release_type):
 
         if target:
             for asset in release.get("assets", []):
-                # Look for the universal arm64 apk
                 if "arm64" in asset["name"].lower() and "universal" in asset["name"].lower():
                     return asset["browser_download_url"], release["tag_name"]
-            # Fallback if exact name isn't found
             for asset in release.get("assets", []):
                 if asset["name"].endswith(".apk") and "arm64" in asset["name"].lower():
                     return asset["browser_download_url"], release["tag_name"]
                     
     return None, None
 
-def download_file(url, dest):
-    print(f"Downloading {url} to {dest}...")
-    with requests.get(url, stream=True) as r:
-        r.raise_for_status()
-        with open(dest, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
-
 def main():
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
 
+    if os.path.exists('build'): shutil.rmtree('build')
+    if os.path.exists('bundles'): shutil.rmtree('bundles')
+    
     os.makedirs('build', exist_ok=True)
     os.makedirs('bundles', exist_ok=True)
 
-    # Download CLI and Patches
-    # NOTE: You may need to update these URLs to the exact Morphe CLI and bundle URLs
-    cli_url = "https://github.com/ReVanced/revanced-cli/releases/latest/download/revanced-cli.jar"
-    patches_url = "https://github.com/dh6k/morphe-patches/releases/latest/download/morphe-patches.jar"
-    integrations_url = "https://github.com/dh6k/morphe-patches/releases/latest/download/morphe-integrations.apk"
+    # 1. Download CLI
+    get_latest_cli_jar()
+
+    # 2. Download Patches
+    # Official prerelease bundle
+    download_file("https://revanced-external-bundles.brosssh.com/api/v2/bundle/MorpheApp/morphe-patches/latest?channel=prerelease", "bundles/official.mpp")
     
-    download_file(cli_url, "build/cli.jar")
-    download_file(patches_url, "build/patches.jar")
-    download_file(integrations_url, "build/integrations.apk")
+    # dh6k patches bundle
+    try:
+        api_url = "https://api.github.com/repos/dh6k/morphe-patches/releases/latest"
+        release = requests.get(api_url).json()
+        for asset in release.get("assets", []):
+            if asset["name"].endswith(".mpp"):
+                download_file(asset["browser_download_url"], "bundles/dh6k.mpp")
+                break
+    except Exception as e:
+        print(f"Warning: Failed to download dh6k patches: {e}")
 
     release_notes = "# Morphe AutoBuilds Release\n\n"
+    
+    # Get CLI version
+    try:
+        cli_version = subprocess.check_output(["java", "-jar", "build/cli.jar", "--version"]).decode().strip()
+    except:
+        cli_version = "Unknown"
 
     for variant in config['variants']:
         print(f"\n--- Building {variant['id']} ---")
@@ -75,38 +104,45 @@ def main():
         apk_path = f"build/{variant['id']}_base.apk"
         download_file(apk_url, apk_path)
 
-        # Generate Morphe/ReVanced options.json
-        options = [
-            {"patchName": "Brave origin", "options": {}},
-            {"patchName": "Change app icon", "options": {"iconPath": "assets/isoamoledbraveicon.png"}},
-            {"patchName": "Disable analytics", "options": {}}
-        ]
-
-        if variant['app_name']:
+        out_apk = f"build/{variant['output_name']}-{tag}-patched.apk"
+        
+        # Prepare options
+        options = []
+        included_patches = []
+        
+        # Base patches from dh6k
+        included_patches.extend(["Brave origin", "Change app icon", "Disable analytics"])
+        options.append({"patchName": "Change app icon", "options": {"iconPath": "assets/isoamoledbraveicon.png"}})
+        
+        if variant.get('app_name'):
+            included_patches.append("Change app name")
             options.append({"patchName": "Change app name", "options": {"appName": variant['app_name']}})
             
-        if variant['clone_package']:
+        if variant.get('clone_package'):
+            included_patches.append("Clone app")
             options.append({"patchName": "Clone app", "options": {"packageName": variant['clone_package']}})
-
+            
         options_path = f"build/{variant['id']}_options.json"
         with open(options_path, 'w') as f:
             json.dump(options, f)
-
-        out_apk = f"build/{variant['output_name']}-{tag}-patched.apk"
-        
+            
+        # Construct Morphe CLI Command
         cmd = [
             "java", "-jar", "build/cli.jar", "patch",
-            "-a", apk_path,
-            "-b", "build/patches.jar",
-            "-m", "build/integrations.apk",
-            "-o", out_apk,
-            "--options", options_path
+            "--patches", "bundles/dh6k.mpp",
+            "--patches", "bundles/official.mpp",
+            "--options-file", options_path,
+            "--out", out_apk,
+            apk_path
         ]
         
+        for p in included_patches:
+            cmd.extend(["-i", p])
+            
         print("Running:", " ".join(cmd))
         try:
             subprocess.run(cmd, check=True)
-            release_notes += f"## {variant['output_name']}\n- Tag: `{tag}`\n- Status: Success\n\n"
+            release_notes += f"## {variant['output_name']}\n- Tag: `{tag}`\n- CLI Version: `{cli_version}`\n- Status: Success\n\n"
         except subprocess.CalledProcessError as e:
             print(f"Failed to build {variant['id']}")
             release_notes += f"## {variant['output_name']}\n- Status: Failed\n\n"
