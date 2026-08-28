@@ -4,7 +4,21 @@ import subprocess
 import requests
 import shutil
 
-MAX_ATTEMPTS = 5  # how many older releases to try per channel
+MAX_ATTEMPTS = 5  # max tries per channel (stable is always added as last resort)
+
+# OPTIONAL PINS: put an exact tag here (e.g. "v1.94.117") to force a version.
+PINNED = {
+    "stable": "",
+    "nightly": "",
+    "beta": ""
+}
+
+def parse_ver(tag):
+    try:
+        nums = (tag or "").lower().lstrip("v").split(".")
+        return tuple(int(x) for x in nums if x.isdigit())[:3]
+    except Exception:
+        return (0, 0, 0)
 
 def get_latest_cli_jar():
     api_url = "https://api.github.com/repos/MorpheApp/morphe-desktop/releases/latest"
@@ -30,26 +44,77 @@ def download_file(url, dest):
 def get_releases(repo):
     return requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=100").json()
 
-def pick_candidates(releases, channel):
-    cands = []
+def get_latest_stable(repo):
+    # Exactly the release with the green "Latest" badge
+    return requests.get(f"https://api.github.com/repos/{repo}/releases/latest").json()
+
+def find_asset(release):
+    for a in release.get("assets", []):
+        n = a["name"].lower()
+        if "arm64" in n and "universal" in n:
+            return a["browser_download_url"]
+    return None
+
+def classify(r, stable_tag):
+    # Classify by TITLE keywords (badges are unreliable for beta)
+    name = (r.get("name") or "").strip().lower()
+    tag = r.get("tag_name") or ""
+    if tag == stable_tag or name.startswith("release"):
+        return "stable"
+    if name.startswith("nightly"):
+        return "nightly"
+    if name.startswith("beta"):
+        return "beta"
+    return None
+
+def pick_candidates(releases, channel, latest_stable):
+    stable_tag = latest_stable.get("tag_name") if latest_stable else None
+    stable_ver = parse_ver(stable_tag)
+    stable_cand = None
+    if latest_stable:
+        url = find_asset(latest_stable)
+        if url:
+            stable_cand = (stable_tag, url)
+
+    old_stables, betas, nightlies, older = [], [], [], []
     for r in releases:
-        tag = (r.get("tag_name") or "")
-        low = tag.lower() + (r.get("name") or "").lower()
-        pre = r.get("prerelease", False)
-        ok = False
-        if channel == "stable" and not pre:
-            ok = True
-        elif channel == "nightly" and pre and "nightly" in low:
-            ok = True
-        elif channel == "beta" and pre and "beta" in low:
-            ok = True
-        if ok:
-            for a in r.get("assets", []):
-                n = a["name"].lower()
-                if "arm64" in n and "universal" in n:
-                    cands.append((tag, a["browser_download_url"]))
-                    break
-    return cands[:MAX_ATTEMPTS]
+        tag = r.get("tag_name") or ""
+        if tag == stable_tag:
+            continue
+        url = find_asset(r)
+        if not url:
+            continue
+        entry = (tag, url)
+        c = classify(r, stable_tag)
+        if c == "stable":
+            old_stables.append(entry)
+        elif c == "beta":
+            betas.append(entry)
+        elif c == "nightly":
+            nightlies.append(entry)
+        if parse_ver(tag) < stable_ver:
+            older.append(entry)
+
+    if channel == "stable":
+        cands = ([stable_cand] if stable_cand else []) + old_stables + older
+    elif channel == "beta":
+        cands = betas + ([stable_cand] if stable_cand else []) + older
+    else:  # nightly
+        cands = nightlies + betas + ([stable_cand] if stable_cand else []) + older
+
+    # dedupe, keep order
+    seen = set()
+    out = []
+    for t, u in cands:
+        if t not in seen:
+            seen.add(t)
+            out.append((t, u))
+
+    out = out[:MAX_ATTEMPTS]
+    # ALWAYS keep stable as the final safety net
+    if stable_cand and stable_cand[0] not in [t for t, _ in out]:
+        out.append(stable_cand)
+    return out
 
 def list_patch_names(bundle):
     out = subprocess.run(["java", "-jar", "build/cli.jar", "list-patches", "-p", bundle],
@@ -82,7 +147,6 @@ def main():
 
     get_latest_cli_jar()
 
-    # dh6k bundle (latest release, pre-releases included)
     dh6k_tag = "unknown"
     rels = requests.get("https://api.github.com/repos/dh6k/morphe-patches/releases").json()
     for r in rels:
@@ -105,14 +169,31 @@ def main():
     probe_opts = {"customIcon": "assets/isoamoledbraveicon.png"}
 
     brave_releases = get_releases("brave/brave-browser")
+    latest_stable = get_latest_stable("brave/brave-browser")
+    print(f"True stable (Latest badge): {latest_stable.get('tag_name')}")
 
-    # Find the newest compatible Brave version per channel
     channel_info = {}
     for channel in ["stable", "nightly", "beta"]:
-        cands = pick_candidates(brave_releases, channel)
+        cands = pick_candidates(brave_releases, channel, latest_stable)
+        print(f"{channel} try-order: {[t for t, _ in cands]}")
+
+        pin = (PINNED.get(channel) or "").strip()
+        if pin:
+            pinned = []
+            for r in brave_releases:
+                if r.get("tag_name") == pin:
+                    url = find_asset(r)
+                    if url:
+                        pinned = [(pin, url)]
+                    break
+            if pinned:
+                cands = pinned
+                print(f"{channel}: pinned to {pin}")
+
         if not cands:
             print(f"No releases found for {channel}")
             continue
+
         chosen_tag = cands[0][0]
         best_effort = True
         for tag, url in cands:
@@ -126,10 +207,9 @@ def main():
             else:
                 print(f"{channel}: {tag} incompatible, trying older...")
         if best_effort:
-            # nothing worked: publish latest anyway, best effort
             download_file(cands[0][1], f"build/base_{channel}.apk")
             chosen_tag = cands[0][0]
-            print(f"{channel}: no compatible version in last {MAX_ATTEMPTS}, using latest (best effort)")
+            print(f"{channel}: no compatible version found, using first candidate (best effort)")
         channel_info[channel] = (chosen_tag, f"build/base_{channel}.apk", best_effort)
 
     release_notes = "# Morphe AutoBuilds Release\n\n"
