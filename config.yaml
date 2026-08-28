@@ -1,0 +1,24 @@
+variants:
+  - id: "brave_origin"
+    type: "stable"
+    output_name: "Brave-Origin-Stable"
+    clone_package: "com.brave.browser"
+    app_name: "Brave Origin"
+
+  - id: "brave_o2"
+    type: "stable"
+    output_name: "BraveO²-Stable"
+    clone_package: "com.brave.origin"
+    app_name: "BraveO²"
+
+  - id: "brave_nightly"
+    type: "nightly"
+    output_name: "Brave-Nightly"
+    clone_package: ""
+    app_name: ""
+
+  - id: "brave_beta"
+    type: "beta"
+    output_name: "Brave-Beta"
+    clone_package: ""
+    app_name: ""
