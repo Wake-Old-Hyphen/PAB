@@ -4,9 +4,8 @@ import subprocess
 import requests
 import shutil
 
-MAX_ATTEMPTS = 5  # max tries per channel (stable is always added as last resort)
+MAX_ATTEMPTS = 5
 
-# OPTIONAL PINS: put an exact tag here (e.g. "v1.94.117") to force a version.
 PINNED = {
     "stable": "",
     "nightly": "",
@@ -45,7 +44,6 @@ def get_releases(repo):
     return requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=100").json()
 
 def get_latest_stable(repo):
-    # Exactly the release with the green "Latest" badge
     return requests.get(f"https://api.github.com/repos/{repo}/releases/latest").json()
 
 def find_asset(release):
@@ -56,7 +54,6 @@ def find_asset(release):
     return None
 
 def classify(r, stable_tag):
-    # Classify by TITLE keywords (badges are unreliable for beta)
     name = (r.get("name") or "").strip().lower()
     tag = r.get("tag_name") or ""
     if tag == stable_tag or name.startswith("release"):
@@ -99,10 +96,9 @@ def pick_candidates(releases, channel, latest_stable):
         cands = ([stable_cand] if stable_cand else []) + old_stables + older
     elif channel == "beta":
         cands = betas + ([stable_cand] if stable_cand else []) + older
-    else:  # nightly
+    else:
         cands = nightlies + betas + ([stable_cand] if stable_cand else []) + older
 
-    # dedupe, keep order
     seen = set()
     out = []
     for t, u in cands:
@@ -111,29 +107,16 @@ def pick_candidates(releases, channel, latest_stable):
             out.append((t, u))
 
     out = out[:MAX_ATTEMPTS]
-    # ALWAYS keep stable as the final safety net
     if stable_cand and stable_cand[0] not in [t for t, _ in out]:
         out.append(stable_cand)
     return out
 
-def list_patch_names(bundle):
-    out = subprocess.run(["java", "-jar", "build/cli.jar", "list-patches", "-p", bundle],
-                         capture_output=True, text=True)
-    names = []
-    for line in out.stdout.splitlines():
-        line = line.strip()
-        if line.startswith("Name:"):
-            names.append(line[5:].strip())
-    return names
-
-def run_patch(apk_path, out_apk, enable, options, continue_on_error=False):
-    cmd = ["java", "-jar", "build/cli.jar", "patch", "-p", "bundles/dh6k.mpp", "-o", out_apk, apk_path]
+def run_patch(apk_path, out_apk, enable, options):
+    cmd = ["java", "-jar", "build/cli.jar", "patch", "-p", "bundles/dh6k.mpp", "-o", out_apk, "--continue-on-error", apk_path]
     for p in enable:
         cmd += ["-e", p]
     for k, v in options.items():
         cmd += ["-O", f"{k}={v}"]
-    if continue_on_error:
-        cmd.append("--continue-on-error")
     print("Running:", " ".join(cmd))
     return subprocess.run(cmd).returncode == 0
 
@@ -161,12 +144,8 @@ def main():
             continue
         break
 
-    available = list_patch_names("bundles/dh6k.mpp")
-    print("Available patches in bundle:", available)
-
+    # HARDCODE the patches we want (skip the broken list-patches validation)
     base_patches = ["Brave Origin", "Change app icon", "Disable analytics"]
-    probe_enable = [p for p in base_patches if p in available]
-    probe_opts = {"customIcon": "assets/isoamoledbraveicon.png"}
 
     brave_releases = get_releases("brave/brave-browser")
     latest_stable = get_latest_stable("brave/brave-browser")
@@ -199,7 +178,8 @@ def main():
         for tag, url in cands:
             apk = f"build/base_{channel}.apk"
             download_file(url, apk)
-            if run_patch(apk, f"build/probe_{channel}.apk", probe_enable, probe_opts):
+            # Probe with base patches only
+            if run_patch(apk, f"build/probe_{channel}.apk", base_patches, {"customIcon": "assets/isoamoledbraveicon.png"}):
                 chosen_tag = tag
                 best_effort = False
                 print(f"{channel}: compatible version found -> {tag}")
@@ -222,33 +202,23 @@ def main():
 
         tag, apk, best_effort = channel_info[channel]
 
-        enable = [p for p in base_patches if p in available]
+        enable = base_patches[:]
         opts = {"customIcon": "assets/isoamoledbraveicon.png"}
-        skipped = []
 
         if variant.get('app_name'):
-            if "Change app name" in available:
-                enable.append("Change app name")
-                opts["appName"] = variant['app_name']
-            else:
-                skipped.append("Change app name")
+            enable.append("Change app name")
+            opts["appName"] = variant['app_name']
 
         if variant.get('clone_package'):
-            if "Clone app" in available:
-                enable.append("Clone app")
-                opts["packageName"] = variant['clone_package']
-            else:
-                skipped.append("Clone app")
+            enable.append("Clone app")
+            opts["packageName"] = variant['clone_package']
 
         out_apk = f"build/{variant['output_name']}-{tag}-{dh6k_tag}-patched.apk"
-        ok = run_patch(apk, out_apk, enable, opts, continue_on_error=best_effort)
+        ok = run_patch(apk, out_apk, enable, opts)
 
-        if ok or (best_effort and os.path.exists(out_apk)):
-            status = "Success" if not best_effort else "Best effort (some patches failed on this Brave version)"
-            release_notes += f"## {variant['output_name']}\n- Brave version: `{tag}`\n- Patch bundle: `{dh6k_tag}`\n- Patches applied: {', '.join(enable)}\n"
-            if skipped:
-                release_notes += f"- Not in bundle (skipped): {', '.join(skipped)}\n"
-            release_notes += f"- Status: {status}\n\n"
+        if ok or os.path.exists(out_apk):
+            status = "Success" if not best_effort else "Best effort (some patches may have failed)"
+            release_notes += f"## {variant['output_name']}\n- Brave version: `{tag}`\n- Patch bundle: `{dh6k_tag}`\n- Patches attempted: {', '.join(enable)}\n- Status: {status}\n\n"
         else:
             release_notes += f"## {variant['output_name']}\n- Status: Failed\n\n"
 
