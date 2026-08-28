@@ -1,60 +1,76 @@
 import os
 import yaml
-import json
 import subprocess
 import requests
 import shutil
+
+MAX_ATTEMPTS = 5  # how many older releases to try per channel
 
 def get_latest_cli_jar():
     api_url = "https://api.github.com/repos/MorpheApp/morphe-desktop/releases/latest"
     release = requests.get(api_url).json()
     for asset in release.get("assets", []):
         if asset["name"].endswith("-all.jar"):
-            url = asset["browser_download_url"]
-            print(f"Downloading CLI: {asset['name']}")
-            with requests.get(url, stream=True) as r:
+            with requests.get(asset["browser_download_url"], stream=True) as r:
                 r.raise_for_status()
                 with open("build/cli.jar", 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
             return asset["name"]
-    raise Exception("Could not find morphe-desktop CLI jar")
+    raise Exception("Could not find CLI jar")
 
 def download_file(url, dest):
-    print(f"Downloading {url} to {dest}...")
+    print(f"Downloading {url} ...")
     with requests.get(url, stream=True) as r:
         r.raise_for_status()
         with open(dest, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
 
-def get_github_release(repo, release_type):
-    api_url = f"https://api.github.com/repos/{repo}/releases"
-    releases = requests.get(api_url).json()
-    
-    for release in releases:
-        tag = release.get("tag_name", "").lower()
-        name = release.get("name", "").lower()
-        is_prerelease = release.get("prerelease", False)
+def get_releases(repo):
+    return requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=100").json()
 
-        if release_type == "stable" and not is_prerelease:
-            target = True
-        elif release_type == "nightly" and is_prerelease and ("nightly" in tag or "nightly" in name):
-            target = True
-        elif release_type == "beta" and is_prerelease and ("beta" in tag or "beta" in name):
-            target = True
-        else:
-            target = False
+def pick_candidates(releases, channel):
+    cands = []
+    for r in releases:
+        tag = (r.get("tag_name") or "")
+        low = tag.lower() + (r.get("name") or "").lower()
+        pre = r.get("prerelease", False)
+        ok = False
+        if channel == "stable" and not pre:
+            ok = True
+        elif channel == "nightly" and pre and "nightly" in low:
+            ok = True
+        elif channel == "beta" and pre and "beta" in low:
+            ok = True
+        if ok:
+            for a in r.get("assets", []):
+                n = a["name"].lower()
+                if "arm64" in n and "universal" in n:
+                    cands.append((tag, a["browser_download_url"]))
+                    break
+    return cands[:MAX_ATTEMPTS]
 
-        if target:
-            for asset in release.get("assets", []):
-                if "arm64" in asset["name"].lower() and "universal" in asset["name"].lower():
-                    return asset["browser_download_url"], release["tag_name"]
-            for asset in release.get("assets", []):
-                if asset["name"].endswith(".apk") and "arm64" in asset["name"].lower():
-                    return asset["browser_download_url"], release["tag_name"]
-                    
-    return None, None
+def list_patch_names(bundle):
+    out = subprocess.run(["java", "-jar", "build/cli.jar", "list-patches", "-p", bundle],
+                         capture_output=True, text=True)
+    names = []
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("Name:"):
+            names.append(line[5:].strip())
+    return names
+
+def run_patch(apk_path, out_apk, enable, options, continue_on_error=False):
+    cmd = ["java", "-jar", "build/cli.jar", "patch", "-p", "bundles/dh6k.mpp", "-o", out_apk, apk_path]
+    for p in enable:
+        cmd += ["-e", p]
+    for k, v in options.items():
+        cmd += ["-O", f"{k}={v}"]
+    if continue_on_error:
+        cmd.append("--continue-on-error")
+    print("Running:", " ".join(cmd))
+    return subprocess.run(cmd).returncode == 0
 
 def main():
     with open('config.yaml', 'r') as f:
@@ -62,89 +78,98 @@ def main():
 
     if os.path.exists('build'): shutil.rmtree('build')
     if os.path.exists('bundles'): shutil.rmtree('bundles')
-    
-    os.makedirs('build', exist_ok=True)
-    os.makedirs('bundles', exist_ok=True)
+    os.makedirs('build'); os.makedirs('bundles')
 
     get_latest_cli_jar()
 
-    # Download dh6k patches (Includes Pre-releases!)
-    try:
-        api_url = "https://api.github.com/repos/dh6k/morphe-patches/releases"
-        releases = requests.get(api_url).json()
-        downloaded = False
-        for release in releases:
-            if release.get("draft"):
-                continue
-            for asset in release.get("assets", []):
-                if asset["name"].endswith(".mpp"):
-                    download_file(asset["browser_download_url"], "bundles/dh6k.mpp")
-                    print(f"Downloaded dh6k version: {release.get('tag_name')} (Prerelease: {release.get('prerelease')})")
-                    downloaded = True
-                    break
-            if downloaded:
+    # dh6k bundle (latest release, pre-releases included)
+    dh6k_tag = "unknown"
+    rels = requests.get("https://api.github.com/repos/dh6k/morphe-patches/releases").json()
+    for r in rels:
+        if r.get("draft"):
+            continue
+        for a in r.get("assets", []):
+            if a["name"].endswith(".mpp"):
+                download_file(a["browser_download_url"], "bundles/dh6k.mpp")
+                dh6k_tag = r.get("tag_name", "unknown")
                 break
-        if not downloaded:
-            raise Exception("No .mpp file found in dh6k releases")
-    except Exception as e:
-        print(f"Warning: Failed to download dh6k patches: {e}")
+        else:
+            continue
+        break
+
+    available = list_patch_names("bundles/dh6k.mpp")
+    print("Available patches in bundle:", available)
+
+    base_patches = ["Brave Origin", "Change app icon", "Disable analytics"]
+    probe_enable = [p for p in base_patches if p in available]
+    probe_opts = {"customIcon": "assets/isoamoledbraveicon.png"}
+
+    brave_releases = get_releases("brave/brave-browser")
+
+    # Find the newest compatible Brave version per channel
+    channel_info = {}
+    for channel in ["stable", "nightly", "beta"]:
+        cands = pick_candidates(brave_releases, channel)
+        if not cands:
+            print(f"No releases found for {channel}")
+            continue
+        chosen_tag = cands[0][0]
+        best_effort = True
+        for tag, url in cands:
+            apk = f"build/base_{channel}.apk"
+            download_file(url, apk)
+            if run_patch(apk, f"build/probe_{channel}.apk", probe_enable, probe_opts):
+                chosen_tag = tag
+                best_effort = False
+                print(f"{channel}: compatible version found -> {tag}")
+                break
+            else:
+                print(f"{channel}: {tag} incompatible, trying older...")
+        if best_effort:
+            # nothing worked: publish latest anyway, best effort
+            download_file(cands[0][1], f"build/base_{channel}.apk")
+            chosen_tag = cands[0][0]
+            print(f"{channel}: no compatible version in last {MAX_ATTEMPTS}, using latest (best effort)")
+        channel_info[channel] = (chosen_tag, f"build/base_{channel}.apk", best_effort)
 
     release_notes = "# Morphe AutoBuilds Release\n\n"
-    
-    try:
-        cli_version = subprocess.check_output(["java", "-jar", "build/cli.jar", "--version"]).decode().strip()
-    except:
-        cli_version = "Unknown"
 
     for variant in config['variants']:
-        print(f"\n--- Building {variant['id']} ---")
-        apk_url, tag = get_github_release("brave/brave-browser", variant['type'])
-        
-        if not apk_url:
-            print(f"Could not find APK for {variant['type']}")
+        channel = variant['type']
+        if channel not in channel_info:
+            release_notes += f"## {variant['output_name']}\n- Status: No APK found for this channel\n\n"
             continue
 
-        apk_path = f"build/{variant['id']}_base.apk"
-        download_file(apk_url, apk_path)
+        tag, apk, best_effort = channel_info[channel]
 
-        out_apk = f"build/{variant['output_name']}-{tag}-patched.apk"
-        
-        included_patches = ["Brave origin", "Change app icon", "Disable analytics"]
-        
+        enable = [p for p in base_patches if p in available]
+        opts = {"customIcon": "assets/isoamoledbraveicon.png"}
+        skipped = []
+
         if variant.get('app_name'):
-            included_patches.append("Change app name")
-            
+            if "Change app name" in available:
+                enable.append("Change app name")
+                opts["appName"] = variant['app_name']
+            else:
+                skipped.append("Change app name")
+
         if variant.get('clone_package'):
-            included_patches.append("Clone app")
-            
-        # Build CLI Command
-        cmd = [
-            "java", "-jar", "build/cli.jar", "patch",
-            "-p", "bundles/dh6k.mpp",
-            "-o", out_apk,
-            "--continue-on-error",
-            apk_path
-        ]
-        
-        # Enable selected patches
-        for p in included_patches:
-            cmd.extend(["-e", p])
-            
-        # Pass Options Directly via -O key=value
-        cmd.extend(["-O", "customIcon=assets/isoamoledbraveicon.png"])
-        
-        if variant.get('app_name'):
-            cmd.extend(["-O", f"appName={variant['app_name']}"])
-            
-        if variant.get('clone_package'):
-            cmd.extend(["-O", f"packageName={variant['clone_package']}"])
-            
-        print("Running:", " ".join(cmd))
-        try:
-            subprocess.run(cmd, check=True)
-            release_notes += f"## {variant['output_name']}\n- Tag: `{tag}`\n- CLI Version: `{cli_version}`\n- Status: Success\n\n"
-        except subprocess.CalledProcessError as e:
-            print(f"Failed to build {variant['id']}")
+            if "Clone app" in available:
+                enable.append("Clone app")
+                opts["packageName"] = variant['clone_package']
+            else:
+                skipped.append("Clone app")
+
+        out_apk = f"build/{variant['output_name']}-{tag}-{dh6k_tag}-patched.apk"
+        ok = run_patch(apk, out_apk, enable, opts, continue_on_error=best_effort)
+
+        if ok or (best_effort and os.path.exists(out_apk)):
+            status = "Success" if not best_effort else "Best effort (some patches failed on this Brave version)"
+            release_notes += f"## {variant['output_name']}\n- Brave version: `{tag}`\n- Patch bundle: `{dh6k_tag}`\n- Patches applied: {', '.join(enable)}\n"
+            if skipped:
+                release_notes += f"- Not in bundle (skipped): {', '.join(skipped)}\n"
+            release_notes += f"- Status: {status}\n\n"
+        else:
             release_notes += f"## {variant['output_name']}\n- Status: Failed\n\n"
 
     with open('release_notes.md', 'w') as f:
