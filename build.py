@@ -6,7 +6,6 @@ import requests
 import shutil
 
 def get_latest_cli_jar():
-    """Downloads the latest morphe-desktop-*-all.jar"""
     api_url = "https://api.github.com/repos/MorpheApp/morphe-desktop/releases/latest"
     release = requests.get(api_url).json()
     for asset in release.get("assets", []):
@@ -67,14 +66,10 @@ def main():
     os.makedirs('build', exist_ok=True)
     os.makedirs('bundles', exist_ok=True)
 
-    # 1. Download CLI
     get_latest_cli_jar()
 
-    # 2. Download Patches
-    # Official prerelease bundle
     download_file("https://revanced-external-bundles.brosssh.com/api/v2/bundle/MorpheApp/morphe-patches/latest?channel=prerelease", "bundles/official.mpp")
     
-    # dh6k patches bundle
     try:
         api_url = "https://api.github.com/repos/dh6k/morphe-patches/releases/latest"
         release = requests.get(api_url).json()
@@ -85,9 +80,13 @@ def main():
     except Exception as e:
         print(f"Warning: Failed to download dh6k patches: {e}")
 
+    print("\n--- LISTING AVAILABLE PATCHES ---")
+    subprocess.run(["java", "-jar", "build/cli.jar", "list-patches", "--patches", "bundles/dh6k.mpp", "--with-packages", "--with-options"], check=False)
+    subprocess.run(["java", "-jar", "build/cli.jar", "list-patches", "--patches", "bundles/official.mpp", "--with-packages", "--with-options"], check=False)
+    print("--- END OF PATCH LIST ---\n")
+
     release_notes = "# Morphe AutoBuilds Release\n\n"
     
-    # Get CLI version
     try:
         cli_version = subprocess.check_output(["java", "-jar", "build/cli.jar", "--version"]).decode().strip()
     except:
@@ -106,33 +105,37 @@ def main():
 
         out_apk = f"build/{variant['output_name']}-{tag}-patched.apk"
         
-        # Prepare options
         options = []
-        included_patches = []
         
-        # Base patches from dh6k
-        included_patches.extend(["Brave origin", "Change app icon", "Disable analytics"])
-        options.append({"patchName": "Change app icon", "options": {"iconPath": "assets/isoamoledbraveicon.png"}})
+        def add_option(patch_name, key, value):
+            for patch in options:
+                if patch["patchName"] == patch_name:
+                    patch["options"].append({"key": key, "value": value})
+                    return
+            options.append({"patchName": patch_name, "options": [{"key": key, "value": value}]})
+
+        included_patches = ["Brave origin", "Change app icon", "Disable analytics"]
+        add_option("Change app icon", "iconPath", "assets/isoamoledbraveicon.png")
         
         if variant.get('app_name'):
             included_patches.append("Change app name")
-            options.append({"patchName": "Change app name", "options": {"appName": variant['app_name']}})
+            add_option("Change app name", "appName", variant['app_name'])
             
         if variant.get('clone_package'):
             included_patches.append("Clone app")
-            options.append({"patchName": "Clone app", "options": {"packageName": variant['clone_package']}})
+            add_option("Clone app", "packageName", variant['clone_package'])
             
         options_path = f"build/{variant['id']}_options.json"
         with open(options_path, 'w') as f:
             json.dump(options, f)
             
-        # Construct Morphe CLI Command
         cmd = [
             "java", "-jar", "build/cli.jar", "patch",
             "--patches", "bundles/dh6k.mpp",
             "--patches", "bundles/official.mpp",
             "--options-file", options_path,
             "--out", out_apk,
+            "--continue-on-error",
             apk_path
         ]
         
