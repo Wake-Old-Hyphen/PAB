@@ -118,48 +118,39 @@ def generate_options_file():
             print("GENERATED OPTIONS FILE:")
             print(content)
             try:
-                data = json.loads(content)
+                return json.loads(content)
             except Exception:
                 return None
-            if isinstance(data, dict):
-                for v in data.values():
-                    if isinstance(v, list):
-                        return v
-                return None
-            return data
     return None
 
-def set_option(entry, key, value):
-    opts = entry.get("options")
-    if isinstance(opts, dict):
-        opts[key] = value
-    elif isinstance(opts, list):
-        for o in opts:
-            if isinstance(o, dict) and (o.get("key") == key or o.get("name") == key or o.get("title") == key):
-                o["value"] = value
-                return
-        opts.append({"key": key, "value": value})
+def set_option_value(opts, key, value):
+    cur = opts.get(key)
+    if isinstance(cur, dict):
+        cur["value"] = value          # older CLI: option = {value:..., required:...}
     else:
-        entry["options"] = {key: value}
+        opts[key] = value             # newer CLI: option = raw value
 
 def make_variant_options(gen_data, wanted):
+    """gen_data = array of bundles. patches live under bundle['patches']."""
     data = copy.deepcopy(gen_data)
-    names_in_file = set()
-    for entry in data:
-        if isinstance(entry, dict):
-            n = entry.get("name") or entry.get("patchName") or ""
-            names_in_file.add(n)
-            if n in wanted:
+    found = set()
+    for bundle in data:
+        patches = bundle.get("patches", {})
+        for name, entry in patches.items():
+            if name in wanted:
+                found.add(name)
                 entry["enabled"] = True
-                for k, v in wanted[n].items():
-                    set_option(entry, k, v)
+                opts = entry.setdefault("options", {})
+                for k, v in wanted[name].items():
+                    set_option_value(opts, k, v)
             else:
                 entry["enabled"] = False
-    missing = [n for n in wanted if n not in names_in_file]
+    missing = [n for n in wanted if n not in found]
     return data, missing
 
 def run_patch(apk_path, out_apk, wanted, gen_data, tag_name):
     cmd = ["java", "-jar", "build/cli.jar", "patch", "-p", "bundles/dh6k.mpp"]
+    missing = []
     if gen_data is not None:
         data, missing = make_variant_options(gen_data, wanted)
         opts_path = f"build/options_{tag_name}.json"
@@ -167,11 +158,13 @@ def run_patch(apk_path, out_apk, wanted, gen_data, tag_name):
             json.dump(data, f, indent=2)
         cmd += ["--options-file", opts_path]
     else:
-        missing = list(wanted.keys())
-    for n in missing:
-        cmd += ["-e", n]
-        for k, v in wanted[n].items():
-            cmd += [f"-O{k}={v}"]
+        # last-resort fallback if generation failed
+        for n, opts in wanted.items():
+            cmd += ["-e", n]
+            for k, v in opts.items():
+                cmd += [f"-O{k}={v}"]
+    if missing:
+        print(f"NOTE: not present in bundle (skipped): {missing}")
     cmd += ["-o", out_apk, "--continue-on-error", apk_path]
     print("Running:", " ".join(cmd))
     return subprocess.run(cmd).returncode == 0
