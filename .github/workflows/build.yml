@@ -3,7 +3,7 @@ name: Morphe AutoBuilds
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 6 * * *" 
+    - cron: "0 6 * * *"
 
 permissions:
   contents: write
@@ -35,16 +35,11 @@ jobs:
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > signing/keystore.jks
 
       - name: Run Build Script
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: python build.py
-
-      - name: Sign APKs
-        run: |
-          for apk in build/*-patched.apk; do
-            if [ -f "$apk" ]; then
-              zipalign -v -p 4 "$apk" "${apk%.*}_aligned.apk"
-              apksigner sign --ks signing/keystore.jks --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} --ks-key-alias ${{ secrets.KEY_ALIAS }} --key-pass pass:${{ secrets.KEY_PASSWORD }} --out "${apk%.*}_signed.apk" "${apk%.*}_aligned.apk"
-            fi
-          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -52,6 +47,6 @@ jobs:
           tag_name: autobuild-${{ github.run_number }}
           name: "AutoBuild ${{ github.run_number }}"
           body_path: release_notes.md
-          files: build/*_signed.apk
+          files: build/*-patched.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
