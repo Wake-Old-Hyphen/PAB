@@ -109,7 +109,6 @@ def pick_candidates(releases, channel, latest_stable):
     return out
 
 def generate_options_file():
-    """Let the CLI write its own options file (guaranteed correct format)."""
     for sub in ("options", "options-create"):
         r = subprocess.run(["java", "-jar", "build/cli.jar", sub, "-p", "bundles/dh6k.mpp", "-o", "build/gen_options.json"])
         if r.returncode == 0 and os.path.exists("build/gen_options.json"):
@@ -126,12 +125,11 @@ def generate_options_file():
 def set_option_value(opts, key, value):
     cur = opts.get(key)
     if isinstance(cur, dict):
-        cur["value"] = value          # older CLI: option = {value:..., required:...}
+        cur["value"] = value
     else:
-        opts[key] = value             # newer CLI: option = raw value
+        opts[key] = value
 
 def make_variant_options(gen_data, wanted):
-    """gen_data = array of bundles. patches live under bundle['patches']."""
     data = copy.deepcopy(gen_data)
     found = set()
     for bundle in data:
@@ -148,7 +146,32 @@ def make_variant_options(gen_data, wanted):
     missing = [n for n in wanted if n not in found]
     return data, missing
 
-def run_patch(apk_path, out_apk, wanted, gen_data, tag_name):
+def detect_alias():
+    """Read the REAL alias from the keystore so the secret can never be wrong."""
+    ks = "signing/keystore.jks"
+    pw = os.environ.get("KEYSTORE_PASSWORD", "")
+    preferred = os.environ.get("KEY_ALIAS", "")
+    try:
+        out = subprocess.run(["keytool", "-list", "-keystore", ks, "-storepass", pw],
+                             capture_output=True, text=True)
+        aliases = []
+        for line in out.stdout.splitlines():
+            line = line.strip()
+            if "PrivateKeyEntry" in line or "trustedCertEntry" in line:
+                alias = line.split(",")[0].strip()
+                if alias:
+                    aliases.append(alias)
+        print(f"Aliases found in keystore: {aliases}")
+        if preferred in aliases:
+            return preferred
+        if aliases:
+            print(f"NOTE: KEY_ALIAS secret not in keystore, using detected alias: {aliases[0]}")
+            return aliases[0]
+    except Exception as e:
+        print("alias detection failed:", e)
+    return preferred
+
+def run_patch(apk_path, out_apk, wanted, gen_data, tag_name, alias):
     cmd = ["java", "-jar", "build/cli.jar", "patch", "-p", "bundles/dh6k.mpp"]
     missing = []
     if gen_data is not None:
@@ -165,12 +188,11 @@ def run_patch(apk_path, out_apk, wanted, gen_data, tag_name):
     if missing:
         print(f"NOTE: not present in bundle (skipped): {missing}")
 
-    # Sign with YOUR persistent key (no zipalign/apksigner needed)
     ks = "signing/keystore.jks"
     if os.path.exists(ks):
         cmd += ["--keystore", ks]
         cmd += ["--keystore-password", os.environ.get("KEYSTORE_PASSWORD", "")]
-        cmd += ["--keystore-entry-alias", os.environ.get("KEY_ALIAS", "morphe")]
+        cmd += ["--keystore-entry-alias", alias]
         cmd += ["--keystore-entry-password", os.environ.get("KEY_PASSWORD", "")]
 
     cmd += ["-o", out_apk, "--continue-on-error", apk_path]
@@ -189,6 +211,9 @@ def main():
         print("Icon found: assets/isoamoledbraveicon.png")
     else:
         print("WARNING: assets/isoamoledbraveicon.png NOT FOUND in repo!")
+
+    alias = detect_alias()
+    print(f"Using signing alias: {alias}")
 
     get_latest_cli_jar()
 
@@ -247,7 +272,7 @@ def main():
         for tag, url in cands:
             apk = f"build/base_{channel}.apk"
             download_file(url, apk)
-            if run_patch(apk, f"build/probe_{channel}.apk", base_wanted, gen_data, f"probe_{channel}"):
+            if run_patch(apk, f"build/probe_{channel}.apk", base_wanted, gen_data, f"probe_{channel}", alias):
                 chosen_tag = tag
                 best_effort = False
                 print(f"{channel}: compatible version found -> {tag}")
@@ -277,7 +302,7 @@ def main():
             wanted["Clone app"] = {"packageName": variant['clone_package']}
 
         out_apk = f"build/{variant['output_name']}-{tag}-{dh6k_tag}-patched.apk"
-        ok = run_patch(apk, out_apk, wanted, gen_data, variant['id'])
+        ok = run_patch(apk, out_apk, wanted, gen_data, variant['id'], alias)
 
         if ok or os.path.exists(out_apk):
             status = "Success" if not best_effort else "Best effort (some patches may have failed)"
