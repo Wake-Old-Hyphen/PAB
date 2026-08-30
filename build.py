@@ -158,13 +158,21 @@ def run_patch(apk_path, out_apk, wanted, gen_data, tag_name):
             json.dump(data, f, indent=2)
         cmd += ["--options-file", opts_path]
     else:
-        # last-resort fallback if generation failed
         for n, opts in wanted.items():
             cmd += ["-e", n]
             for k, v in opts.items():
                 cmd += [f"-O{k}={v}"]
     if missing:
         print(f"NOTE: not present in bundle (skipped): {missing}")
+
+    # Sign with YOUR persistent key (no zipalign/apksigner needed)
+    ks = "signing/keystore.jks"
+    if os.path.exists(ks):
+        cmd += ["--keystore", ks]
+        cmd += ["--keystore-password", os.environ.get("KEYSTORE_PASSWORD", "")]
+        cmd += ["--keystore-entry-alias", os.environ.get("KEY_ALIAS", "morphe")]
+        cmd += ["--keystore-entry-password", os.environ.get("KEY_PASSWORD", "")]
+
     cmd += ["-o", out_apk, "--continue-on-error", apk_path]
     print("Running:", " ".join(cmd))
     return subprocess.run(cmd).returncode == 0
