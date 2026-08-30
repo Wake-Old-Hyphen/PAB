@@ -1,16 +1,14 @@
 import os
 import yaml
+import json
+import copy
 import subprocess
 import requests
 import shutil
 
 MAX_ATTEMPTS = 5
 
-PINNED = {
-    "stable": "",
-    "nightly": "",
-    "beta": ""
-}
+PINNED = {"stable": "", "nightly": "", "beta": ""}
 
 def parse_ver(tag):
     try:
@@ -105,18 +103,76 @@ def pick_candidates(releases, channel, latest_stable):
         if t not in seen:
             seen.add(t)
             out.append((t, u))
-
     out = out[:MAX_ATTEMPTS]
     if stable_cand and stable_cand[0] not in [t for t, _ in out]:
         out.append(stable_cand)
     return out
 
-def run_patch(apk_path, out_apk, enable, options):
-    cmd = ["java", "-jar", "build/cli.jar", "patch", "-p", "bundles/dh6k.mpp", "-o", out_apk, "--continue-on-error", apk_path]
-    for p in enable:
-        cmd += ["-e", p]
-    for k, v in options.items():
-        cmd += ["-O", f"{k}={v}"]
+def generate_options_file():
+    """Let the CLI write its own options file (guaranteed correct format)."""
+    for sub in ("options", "options-create"):
+        r = subprocess.run(["java", "-jar", "build/cli.jar", sub, "-p", "bundles/dh6k.mpp", "-o", "build/gen_options.json"])
+        if r.returncode == 0 and os.path.exists("build/gen_options.json"):
+            with open("build/gen_options.json") as f:
+                content = f.read()
+            print("GENERATED OPTIONS FILE:")
+            print(content)
+            try:
+                data = json.loads(content)
+            except Exception:
+                return None
+            if isinstance(data, dict):
+                for v in data.values():
+                    if isinstance(v, list):
+                        return v
+                return None
+            return data
+    return None
+
+def set_option(entry, key, value):
+    opts = entry.get("options")
+    if isinstance(opts, dict):
+        opts[key] = value
+    elif isinstance(opts, list):
+        for o in opts:
+            if isinstance(o, dict) and (o.get("key") == key or o.get("name") == key or o.get("title") == key):
+                o["value"] = value
+                return
+        opts.append({"key": key, "value": value})
+    else:
+        entry["options"] = {key: value}
+
+def make_variant_options(gen_data, wanted):
+    data = copy.deepcopy(gen_data)
+    names_in_file = set()
+    for entry in data:
+        if isinstance(entry, dict):
+            n = entry.get("name") or entry.get("patchName") or ""
+            names_in_file.add(n)
+            if n in wanted:
+                entry["enabled"] = True
+                for k, v in wanted[n].items():
+                    set_option(entry, k, v)
+            else:
+                entry["enabled"] = False
+    missing = [n for n in wanted if n not in names_in_file]
+    return data, missing
+
+def run_patch(apk_path, out_apk, wanted, gen_data, tag_name):
+    cmd = ["java", "-jar", "build/cli.jar", "patch", "-p", "bundles/dh6k.mpp"]
+    if gen_data is not None:
+        data, missing = make_variant_options(gen_data, wanted)
+        opts_path = f"build/options_{tag_name}.json"
+        with open(opts_path, "w") as f:
+            json.dump(data, f, indent=2)
+        cmd += ["--options-file", opts_path]
+    else:
+        missing = list(wanted.keys())
+    for n in missing:
+        cmd += ["-e", n]
+        for k, v in wanted[n].items():
+            cmd += [f"-O{k}={v}"]
+    cmd += ["-o", out_apk, "--continue-on-error", apk_path]
     print("Running:", " ".join(cmd))
     return subprocess.run(cmd).returncode == 0
 
@@ -127,6 +183,11 @@ def main():
     if os.path.exists('build'): shutil.rmtree('build')
     if os.path.exists('bundles'): shutil.rmtree('bundles')
     os.makedirs('build'); os.makedirs('bundles')
+
+    if os.path.exists("assets/isoamoledbraveicon.png"):
+        print("Icon found: assets/isoamoledbraveicon.png")
+    else:
+        print("WARNING: assets/isoamoledbraveicon.png NOT FOUND in repo!")
 
     get_latest_cli_jar()
 
@@ -144,8 +205,15 @@ def main():
             continue
         break
 
-    # HARDCODE the patches we want (skip the broken list-patches validation)
-    base_patches = ["Brave Origin", "Change app icon", "Disable analytics"]
+    gen_data = generate_options_file()
+    if gen_data is None:
+        print("WARNING: could not generate options file, falling back to -e/-O flags")
+
+    base_wanted = {
+        "Brave Origin": {},
+        "Change app icon": {"customIcon": "assets/isoamoledbraveicon.png"},
+        "Disable analytics": {}
+    }
 
     brave_releases = get_releases("brave/brave-browser")
     latest_stable = get_latest_stable("brave/brave-browser")
@@ -178,8 +246,7 @@ def main():
         for tag, url in cands:
             apk = f"build/base_{channel}.apk"
             download_file(url, apk)
-            # Probe with base patches only
-            if run_patch(apk, f"build/probe_{channel}.apk", base_patches, {"customIcon": "assets/isoamoledbraveicon.png"}):
+            if run_patch(apk, f"build/probe_{channel}.apk", base_wanted, gen_data, f"probe_{channel}"):
                 chosen_tag = tag
                 best_effort = False
                 print(f"{channel}: compatible version found -> {tag}")
@@ -202,23 +269,18 @@ def main():
 
         tag, apk, best_effort = channel_info[channel]
 
-        enable = base_patches[:]
-        opts = {"customIcon": "assets/isoamoledbraveicon.png"}
-
+        wanted = copy.deepcopy(base_wanted)
         if variant.get('app_name'):
-            enable.append("Change app name")
-            opts["appName"] = variant['app_name']
-
+            wanted["Change app name"] = {"appName": variant['app_name']}
         if variant.get('clone_package'):
-            enable.append("Clone app")
-            opts["packageName"] = variant['clone_package']
+            wanted["Clone app"] = {"packageName": variant['clone_package']}
 
         out_apk = f"build/{variant['output_name']}-{tag}-{dh6k_tag}-patched.apk"
-        ok = run_patch(apk, out_apk, enable, opts)
+        ok = run_patch(apk, out_apk, wanted, gen_data, variant['id'])
 
         if ok or os.path.exists(out_apk):
             status = "Success" if not best_effort else "Best effort (some patches may have failed)"
-            release_notes += f"## {variant['output_name']}\n- Brave version: `{tag}`\n- Patch bundle: `{dh6k_tag}`\n- Patches attempted: {', '.join(enable)}\n- Status: {status}\n\n"
+            release_notes += f"## {variant['output_name']}\n- Brave version: `{tag}`\n- Patch bundle: `{dh6k_tag}`\n- Patches attempted: {', '.join(wanted.keys())}\n- Status: {status}\n\n"
         else:
             release_notes += f"## {variant['output_name']}\n- Status: Failed\n\n"
 
