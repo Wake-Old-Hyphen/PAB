@@ -1,4 +1,5 @@
 import os
+import re
 import yaml
 import json
 import copy
@@ -9,6 +10,12 @@ import shutil
 MAX_ATTEMPTS = 5
 
 PINNED = {"stable": "", "nightly": "", "beta": ""}
+
+CHANNEL_PKG = {
+    "stable": "com.brave.browser",
+    "beta": "com.brave.browser_beta",
+    "nightly": "com.brave.browser_nightly"
+}
 
 def parse_ver(tag):
     try:
@@ -114,8 +121,6 @@ def generate_options_file():
         if r.returncode == 0 and os.path.exists("build/gen_options.json"):
             with open("build/gen_options.json") as f:
                 content = f.read()
-            print("GENERATED OPTIONS FILE:")
-            print(content)
             try:
                 return json.loads(content)
             except Exception:
@@ -147,7 +152,6 @@ def make_variant_options(gen_data, wanted):
     return data, missing
 
 def detect_alias():
-    """Read the REAL alias from the keystore so the secret can never be wrong."""
     ks = "signing/keystore.jks"
     pw = os.environ.get("KEYSTORE_PASSWORD", "")
     preferred = os.environ.get("KEY_ALIAS", "")
@@ -171,12 +175,50 @@ def detect_alias():
         print("alias detection failed:", e)
     return preferred
 
-def run_patch(apk_path, out_apk, wanted, gen_data, tag_name, alias):
+def parse_patches_info():
+    r = subprocess.run(["java", "-jar", "build/cli.jar", "list-patches", "-p", "bundles/dh6k.mpp",
+                        "--with-packages", "--with-options"], capture_output=True, text=True)
+    print(r.stdout)
+    info = []
+    cur = None
+    pending_required = False
+    for raw in r.stdout.splitlines():
+        line = raw.strip()
+        if line.startswith("Index:"):
+            cur = {"name": None, "packages": [], "required_opts": []}
+            info.append(cur)
+        elif cur is None:
+            continue
+        elif line.startswith("Name:"):
+            cur["name"] = line[5:].strip()
+        elif line.startswith("Required:"):
+            pending_required = line.split(":", 1)[1].strip().lower() == "true"
+        elif line.startswith("Key:"):
+            if pending_required:
+                cur["required_opts"].append(line[4:].strip())
+            pending_required = False
+        elif line.startswith("Package name:"):
+            cur["packages"].append(line.split(":", 1)[1].strip())
+    return [p for p in info if p["name"]]
+
+def compute_auto(info, channel_pkg, exclude, configured):
+    auto = []
+    for p in info:
+        n = p["name"]
+        if n in configured or n in exclude:
+            continue
+        if p["required_opts"]:
+            continue
+        if p["packages"] and channel_pkg in p["packages"]:
+            auto.append(n)
+    return auto
+
+def run_patch(apk_path, out_apk, wanted, gen_data, label, alias):
     cmd = ["java", "-jar", "build/cli.jar", "patch", "-p", "bundles/dh6k.mpp"]
     missing = []
     if gen_data is not None:
         data, missing = make_variant_options(gen_data, wanted)
-        opts_path = f"build/options_{tag_name}.json"
+        opts_path = f"build/options_{label}.json"
         with open(opts_path, "w") as f:
             json.dump(data, f, indent=2)
         cmd += ["--options-file", opts_path]
@@ -185,23 +227,81 @@ def run_patch(apk_path, out_apk, wanted, gen_data, tag_name, alias):
             cmd += ["-e", n]
             for k, v in opts.items():
                 cmd += [f"-O{k}={v}"]
-    if missing:
-        print(f"NOTE: not present in bundle (skipped): {missing}")
-
     ks = "signing/keystore.jks"
     if os.path.exists(ks):
-        cmd += ["--keystore", ks]
-        cmd += ["--keystore-password", os.environ.get("KEYSTORE_PASSWORD", "")]
-        cmd += ["--keystore-entry-alias", alias]
-        cmd += ["--keystore-entry-password", os.environ.get("KEY_PASSWORD", "")]
-
+        cmd += ["--keystore", ks,
+                "--keystore-password", os.environ.get("KEYSTORE_PASSWORD", ""),
+                "--keystore-entry-alias", alias,
+                "--keystore-entry-password", os.environ.get("KEY_PASSWORD", "")]
     cmd += ["-o", out_apk, "--continue-on-error", apk_path]
     print("Running:", " ".join(cmd))
-    return subprocess.run(cmd).returncode == 0
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    print(r.stdout)
+    if r.stderr:
+        print(r.stderr)
+    applied = []
+    for m in re.findall(r"Applied:\s*(.+)", r.stdout):
+        m = m.strip()
+        if m not in applied:
+            applied.append(m)
+    failed = []
+    for m in re.findall(r"FAILED:\s*(.+)", r.stdout + "\n" + r.stderr):
+        m = m.strip()
+        if m not in failed:
+            failed.append(m)
+    return r.returncode == 0, applied, failed, missing
+
+def heal_patch(apk, out_apk, wanted, auto, gen_data, alias, label):
+    """Layer 1 healing: drop failed AUTO patches and re-patch the same APK."""
+    auto = list(auto)
+    dropped = []
+    while True:
+        full = dict(wanted)
+        for n in auto:
+            full[n] = {}
+        ok, applied, failed, missing = run_patch(apk, out_apk, full, gen_data, label, alias)
+        if ok:
+            return True, applied, dropped
+        auto_failed = [n for n in failed if n in auto]
+        if not auto_failed:
+            return False, applied, dropped
+        for n in auto_failed:
+            auto.remove(n)
+            dropped.append(n)
+
+def get_apk(tag, url, cache):
+    if tag not in cache:
+        path = f"build/base_{tag.replace('.', '_')}.apk"
+        download_file(url, path)
+        cache[tag] = path
+    return cache[tag]
+
+def find_version(cands, wanted, auto_all, gen_data, alias, cache, label, start_tag=None):
+    """Layer 2 healing: walk APK versions when a core patch fails."""
+    ordered = cands
+    if start_tag:
+        ordered = [c for c in cands if c[0] == start_tag] + [c for c in cands if c[0] != start_tag]
+    for tag, url in ordered:
+        apk = get_apk(tag, url, cache)
+        ok, applied, dropped = heal_patch(apk, f"build/out_{label}_{tag.replace('.', '_')}.apk",
+                                          wanted, auto_all, gen_data, alias, f"{label}_{tag}")
+        if ok:
+            print(f"{label}: working version -> {tag}")
+            return tag, applied, dropped, False
+        print(f"{label}: {tag} not workable, trying older...")
+    tag, url = ordered[0]
+    apk = get_apk(tag, url, cache)
+    ok, applied, dropped = heal_patch(apk, f"build/out_{label}_{tag.replace('.', '_')}.apk",
+                                      wanted, auto_all, gen_data, alias, f"{label}_besteffort")
+    print(f"{label}: no fully working version, best effort on {tag}")
+    return tag, applied, dropped, True
 
 def main():
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
+
+    exclude = config.get("exclude_patches", []) or []
+    auto_on = config.get("auto_include_new_patches", True)
 
     if os.path.exists('build'): shutil.rmtree('build')
     if os.path.exists('bundles'): shutil.rmtree('bundles')
@@ -233,7 +333,10 @@ def main():
 
     gen_data = generate_options_file()
     if gen_data is None:
-        print("WARNING: could not generate options file, falling back to -e/-O flags")
+        print("WARNING: could not generate options file")
+
+    info = parse_patches_info()
+    bundle_names = set(p["name"] for p in info)
 
     base_wanted = {
         "Brave Origin": {},
@@ -245,10 +348,11 @@ def main():
     latest_stable = get_latest_stable("brave/brave-browser")
     print(f"True stable (Latest badge): {latest_stable.get('tag_name')}")
 
-    channel_info = {}
+    apk_cache = {}
+    release_notes = "# Morphe AutoBuilds Release\n\n"
+
     for channel in ["stable", "nightly", "beta"]:
         cands = pick_candidates(brave_releases, channel, latest_stable)
-        print(f"{channel} try-order: {[t for t, _ in cands]}")
 
         pin = (PINNED.get(channel) or "").strip()
         if pin:
@@ -267,48 +371,56 @@ def main():
             print(f"No releases found for {channel}")
             continue
 
-        chosen_tag = cands[0][0]
-        best_effort = True
-        for tag, url in cands:
-            apk = f"build/base_{channel}.apk"
-            download_file(url, apk)
-            if run_patch(apk, f"build/probe_{channel}.apk", base_wanted, gen_data, f"probe_{channel}", alias):
-                chosen_tag = tag
-                best_effort = False
-                print(f"{channel}: compatible version found -> {tag}")
-                break
-            else:
-                print(f"{channel}: {tag} incompatible, trying older...")
-        if best_effort:
-            download_file(cands[0][1], f"build/base_{channel}.apk")
-            chosen_tag = cands[0][0]
-            print(f"{channel}: no compatible version found, using first candidate (best effort)")
-        channel_info[channel] = (chosen_tag, f"build/base_{channel}.apk", best_effort)
+        auto_all = compute_auto(info, CHANNEL_PKG[channel], exclude, set(base_wanted)) if auto_on else []
+        print(f"{channel}: auto-included new patches: {auto_all}")
 
-    release_notes = "# Morphe AutoBuilds Release\n\n"
+        # Probe: find a working version with base patches + auto patches
+        probe_tag, probe_applied, probe_dropped, _ = find_version(
+            cands, base_wanted, auto_all, gen_data, alias, apk_cache, f"probe_{channel}")
 
-    for variant in config['variants']:
-        channel = variant['type']
-        if channel not in channel_info:
-            release_notes += f"## {variant['output_name']}\n- Status: No APK found for this channel\n\n"
-            continue
+        surviving_auto = [n for n in auto_all if n not in probe_dropped]
 
-        tag, apk, best_effort = channel_info[channel]
+        channel_variants = [v for v in config['variants'] if v['type'] == channel]
+        for variant in channel_variants:
+            wanted = copy.deepcopy(base_wanted)
+            skipped = []
 
-        wanted = copy.deepcopy(base_wanted)
-        if variant.get('app_name'):
-            wanted["Change app name"] = {"appName": variant['app_name']}
-        if variant.get('clone_package'):
-            wanted["Clone app"] = {"packageName": variant['clone_package']}
+            if variant.get('app_name'):
+                if "Change app name" in bundle_names:
+                    wanted["Change app name"] = {"appName": variant['app_name']}
+                else:
+                    skipped.append("Change app name")
+            if variant.get('clone_package'):
+                if "Clone app" in bundle_names:
+                    wanted["Clone app"] = {"packageName": variant['clone_package']}
+                else:
+                    skipped.append("Clone app")
 
-        out_apk = f"build/{variant['output_name']}-{tag}-{dh6k_tag}-patched.apk"
-        ok = run_patch(apk, out_apk, wanted, gen_data, variant['id'], alias)
+            tag, applied, dropped, best_effort = find_version(
+                cands, wanted, surviving_auto, gen_data, alias, apk_cache,
+                variant['id'], start_tag=probe_tag)
 
-        if ok or os.path.exists(out_apk):
-            status = "Success" if not best_effort else "Best effort (some patches may have failed)"
-            release_notes += f"## {variant['output_name']}\n- Brave version: `{tag}`\n- Patch bundle: `{dh6k_tag}`\n- Patches attempted: {', '.join(wanted.keys())}\n- Status: {status}\n\n"
-        else:
-            release_notes += f"## {variant['output_name']}\n- Status: Failed\n\n"
+            # Move the final patched apk to its release name
+            final_name = f"build/{variant['output_name']}-{tag}-{dh6k_tag}-patched.apk"
+            src = f"build/out_{variant['id']}_{tag.replace('.', '_')}.apk"
+            if not os.path.exists(src):
+                src = f"build/out_{variant['id']}_besteffort_{tag.replace('.', '_')}.apk"
+            if os.path.exists(src):
+                shutil.copyfile(src, final_name)
+
+            release_notes += f"## {variant['output_name']}\n"
+            release_notes += f"Brave version: {tag}\n"
+            release_notes += f"Patch bundle: {dh6k_tag}\n\n"
+            release_notes += "Applied patches:\n"
+            release_notes += "\n".join(f"- {a}" for a in applied) if applied else "- none"
+            release_notes += "\n"
+            if dropped:
+                release_notes += "\nDropped after failure (rebuilt without it):\n"
+                release_notes += "\n".join(f"- {d}" for d in dropped) + "\n"
+            if skipped:
+                release_notes += "\nSkipped (needs custom values or not in bundle):\n"
+                release_notes += "\n".join(f"- {s}" for s in skipped) + "\n"
+            release_notes += "\nStatus: " + ("Best effort (some patches failed)" if best_effort else "Success") + "\n\n"
 
     with open('release_notes.md', 'w') as f:
         f.write(release_notes)
