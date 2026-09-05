@@ -47,6 +47,13 @@ def download_file(url, dest):
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
 
+def is_valid_mpp(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read(2) == b"PK"
+    except Exception:
+        return False
+
 def get_releases(repo):
     return requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=100").json()
 
@@ -157,6 +164,15 @@ def make_variant_options(gen_data, wanted):
     missing = [n for n in wanted if n not in found]
     return data, missing
 
+def needs_value_names(gen_data):
+    need = set()
+    for bundle in gen_data or []:
+        for name, entry in (bundle.get("patches") or {}).items():
+            for v in (entry.get("options") or {}).values():
+                if v is None or (isinstance(v, dict) and v.get("value") is None):
+                    need.add(name)
+    return need
+
 def detect_alias():
     ks = "signing/keystore.jks"
     pw = os.environ.get("KEYSTORE_PASSWORD", "")
@@ -194,29 +210,34 @@ def parse_patches_info(bundles):
     for raw in r.stdout.splitlines():
         line = raw.strip()
         if line.startswith("Index:"):
-            cur = {"name": None, "packages": [], "required_opts": []}
+            cur = {"name": None, "packages": [], "required_opts": [], "last_key": None}
             info.append(cur)
         elif cur is None:
             continue
         elif line.startswith("Name:"):
             cur["name"] = line[5:].strip()
         elif line.startswith("Required:"):
-            pending_required = line.split(":", 1)[1].strip().lower() == "true"
+            req = line.split(":", 1)[1].strip().lower() == "true"
+            if req and cur.get("last_key"):
+                cur["required_opts"].append(cur["last_key"])
+            pending_required = req
         elif line.startswith("Key:"):
+            key = line[4:].strip()
+            cur["last_key"] = key
             if pending_required:
-                cur["required_opts"].append(line[4:].strip())
+                cur["required_opts"].append(key)
             pending_required = False
         elif line.startswith("Package name:"):
             cur["packages"].append(line.split(":", 1)[1].strip())
     return [p for p in info if p["name"]]
 
-def compute_auto(info, channel_pkg, exclude, configured):
+def compute_auto(info, channel_pkg, exclude, configured, needs_value):
     auto = []
     for p in info:
         n = p["name"]
         if n in configured or n in exclude:
             continue
-        if p["required_opts"]:
+        if p["required_opts"] or n in needs_value:
             continue
         if p["packages"] and channel_pkg in p["packages"]:
             auto.append(n)
@@ -359,6 +380,11 @@ def main():
             continue
         break
 
+    if os.path.exists("bundles/official.mpp") and not is_valid_mpp("bundles/official.mpp"):
+        print("WARNING: official bundle file invalid, discarding")
+        os.remove("bundles/official.mpp")
+        official_tag = ""
+
     BUNDLES.clear()
     BUNDLES.append("bundles/dh6k.mpp")
     if os.path.exists("bundles/official.mpp"):
@@ -369,9 +395,14 @@ def main():
     if gen_data is None:
         print("WARNING: could not generate options file")
 
-    info_all = parse_patches_info(BUNDLES)
     info_dh6k = parse_patches_info(["bundles/dh6k.mpp"])
-    bundle_names = set(p["name"] for p in info_all)
+    bundle_names = set(p["name"] for p in info_dh6k)
+    if "bundles/official.mpp" in BUNDLES:
+        info_off = parse_patches_info(["bundles/official.mpp"])
+        bundle_names |= set(p["name"] for p in info_off)
+
+    needs_value = needs_value_names(gen_data)
+    print(f"Patches that need values (never auto-included): {sorted(needs_value)}")
 
     base_wanted = {
         "Brave Origin": {},
@@ -406,7 +437,7 @@ def main():
             print(f"No releases found for {channel}")
             continue
 
-        auto_all = compute_auto(info_dh6k, CHANNEL_PKG[channel], exclude, set(base_wanted)) if auto_on else []
+        auto_all = compute_auto(info_dh6k, CHANNEL_PKG[channel], exclude, set(base_wanted), needs_value) if auto_on else []
         print(f"{channel}: auto-included new patches: {auto_all}")
 
         probe_tag, probe_applied, probe_dropped, _ = find_version(
