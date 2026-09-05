@@ -147,6 +147,20 @@ def set_option_value(opts, key, value):
     else:
         opts[key] = value
 
+def apply_option(entry, key, value):
+    opts = entry.setdefault("options", {})
+    if key in opts:
+        set_option_value(opts, key, value)
+        return
+    for k in list(opts):
+        if k.lower() == key.lower():
+            set_option_value(opts, k, value)
+            return
+    if len(opts) == 1:
+        set_option_value(opts, list(opts)[0], value)
+        return
+    set_option_value(opts, key, value)
+
 def make_variant_options(gen_data, wanted):
     data = copy.deepcopy(gen_data)
     found = set()
@@ -156,9 +170,8 @@ def make_variant_options(gen_data, wanted):
             if name in wanted:
                 found.add(name)
                 entry["enabled"] = True
-                opts = entry.setdefault("options", {})
                 for k, v in wanted[name].items():
-                    set_option_value(opts, k, v)
+                    apply_option(entry, k, v)
             else:
                 entry["enabled"] = False
     missing = [n for n in wanted if n not in found]
@@ -294,7 +307,8 @@ def heal_patch(apk, out_apk, wanted, auto, gen_data, alias, label):
     while True:
         full = dict(wanted)
         for n in auto:
-            full[n] = {}
+            if n not in full:
+                full[n] = {}
         ok, applied, failed, missing = run_patch(apk, out_apk, full, gen_data, label, alias)
         if ok:
             return True, applied, dropped
@@ -410,6 +424,11 @@ def main():
         "Disable analytics": {}
     }
 
+    name_patch = next((n for n in bundle_names if n.lower() == "change app name"), None)
+    clone_patch = next((n for n in bundle_names if n.lower() == "clone app"), None)
+    print(f"Resolved name patch: {name_patch}, clone patch: {clone_patch}")
+    configurable = set(base_wanted) | {p for p in (name_patch, clone_patch) if p}
+
     brave_releases = get_releases("brave/brave-browser")
     latest_stable = get_latest_stable("brave/brave-browser")
     print(f"True stable (Latest badge): {latest_stable.get('tag_name')}")
@@ -437,7 +456,7 @@ def main():
             print(f"No releases found for {channel}")
             continue
 
-        auto_all = compute_auto(info_dh6k, CHANNEL_PKG[channel], exclude, set(base_wanted), needs_value) if auto_on else []
+        auto_all = compute_auto(info_dh6k, CHANNEL_PKG[channel], exclude, configurable, needs_value) if auto_on else []
         print(f"{channel}: auto-included new patches: {auto_all}")
 
         probe_tag, probe_applied, probe_dropped, _ = find_version(
@@ -451,13 +470,13 @@ def main():
             skipped = []
 
             if variant.get('app_name'):
-                if "Change app name" in bundle_names:
-                    wanted["Change app name"] = {"appName": variant['app_name']}
+                if name_patch:
+                    wanted[name_patch] = {"appName": variant['app_name']}
                 else:
                     skipped.append("Change app name")
             if variant.get('clone_package'):
-                if "Clone app" in bundle_names:
-                    wanted["Clone app"] = {"packageName": variant['clone_package']}
+                if clone_patch:
+                    wanted[clone_patch] = {"packageName": variant['clone_package']}
                 else:
                     skipped.append("Clone app")
 
