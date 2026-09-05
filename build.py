@@ -410,10 +410,12 @@ def main():
         print("WARNING: could not generate options file")
 
     info_dh6k = parse_patches_info(["bundles/dh6k.mpp"])
-    bundle_names = set(p["name"] for p in info_dh6k)
-    if "bundles/official.mpp" in BUNDLES:
-        info_off = parse_patches_info(["bundles/official.mpp"])
-        bundle_names |= set(p["name"] for p in info_off)
+
+    # Authoritative patch names: the options file the CLI itself generated
+    bundle_names = set()
+    for bundle in gen_data or []:
+        bundle_names |= set((bundle.get("patches") or {}).keys())
+    print(f"Patch names available: {sorted(bundle_names)}")
 
     needs_value = needs_value_names(gen_data)
     print(f"Patches that need values (never auto-included): {sorted(needs_value)}")
@@ -424,8 +426,17 @@ def main():
         "Disable analytics": {}
     }
 
-    name_patch = next((n for n in bundle_names if n.lower() == "change app name"), None)
-    clone_patch = next((n for n in bundle_names if n.lower() == "clone app"), None)
+    def resolve(target):
+        for n in bundle_names:
+            if n.lower() == target:
+                return n
+        for n in bundle_names:
+            if target in n.lower():
+                return n
+        return None
+
+    name_patch = resolve("change app name")
+    clone_patch = resolve("clone app")
     print(f"Resolved name patch: {name_patch}, clone patch: {clone_patch}")
     configurable = set(base_wanted) | {p for p in (name_patch, clone_patch) if p}
 
