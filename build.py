@@ -17,6 +17,8 @@ CHANNEL_PKG = {
     "nightly": "com.brave.browser_nightly"
 }
 
+BUNDLES = []
+
 def parse_ver(tag):
     try:
         nums = (tag or "").lower().lstrip("v").split(".")
@@ -115,9 +117,13 @@ def pick_candidates(releases, channel, latest_stable):
         out.append(stable_cand)
     return out
 
-def generate_options_file():
+def generate_options_file(bundles):
     for sub in ("options", "options-create"):
-        r = subprocess.run(["java", "-jar", "build/cli.jar", sub, "-p", "bundles/dh6k.mpp", "-o", "build/gen_options.json"])
+        cmd = ["java", "-jar", "build/cli.jar", sub]
+        for b in bundles:
+            cmd += ["-p", b]
+        cmd += ["-o", "build/gen_options.json"]
+        r = subprocess.run(cmd)
         if r.returncode == 0 and os.path.exists("build/gen_options.json"):
             with open("build/gen_options.json") as f:
                 content = f.read()
@@ -175,9 +181,12 @@ def detect_alias():
         print("alias detection failed:", e)
     return preferred
 
-def parse_patches_info():
-    r = subprocess.run(["java", "-jar", "build/cli.jar", "list-patches", "-p", "bundles/dh6k.mpp",
-                        "--with-packages", "--with-options"], capture_output=True, text=True)
+def parse_patches_info(bundles):
+    cmd = ["java", "-jar", "build/cli.jar", "list-patches"]
+    for b in bundles:
+        cmd += ["-p", b]
+    cmd += ["--with-packages", "--with-options"]
+    r = subprocess.run(cmd, capture_output=True, text=True)
     print(r.stdout)
     info = []
     cur = None
@@ -214,19 +223,26 @@ def compute_auto(info, channel_pkg, exclude, configured):
     return auto
 
 def run_patch(apk_path, out_apk, wanted, gen_data, label, alias):
-    cmd = ["java", "-jar", "build/cli.jar", "patch", "-p", "bundles/dh6k.mpp"]
+    cmd = ["java", "-jar", "build/cli.jar", "patch"]
+    for b in BUNDLES:
+        cmd += ["-p", b]
     missing = []
     if gen_data is not None:
         data, missing = make_variant_options(gen_data, wanted)
         opts_path = f"build/options_{label}.json"
         with open(opts_path, "w") as f:
             json.dump(data, f, indent=2)
+        with open(opts_path) as f:
+            print(f"OPTIONS FILE FOR {label}:")
+            print(f.read())
         cmd += ["--options-file", opts_path]
     else:
         for n, opts in wanted.items():
             cmd += ["-e", n]
             for k, v in opts.items():
                 cmd += [f"-O{k}={v}"]
+    if missing:
+        print(f"NOTE: not present in bundle (skipped): {missing}")
     ks = "signing/keystore.jks"
     if os.path.exists(ks):
         cmd += ["--keystore", ks,
@@ -252,7 +268,6 @@ def run_patch(apk_path, out_apk, wanted, gen_data, label, alias):
     return r.returncode == 0, applied, failed, missing
 
 def heal_patch(apk, out_apk, wanted, auto, gen_data, alias, label):
-    """Layer 1 healing: drop failed AUTO patches and re-patch the same APK."""
     auto = list(auto)
     dropped = []
     while True:
@@ -277,7 +292,6 @@ def get_apk(tag, url, cache):
     return cache[tag]
 
 def find_version(cands, wanted, auto_all, gen_data, alias, cache, label, start_tag=None):
-    """Layer 2 healing: walk APK versions when a core patch fails."""
     ordered = cands
     if start_tag:
         ordered = [c for c in cands if c[0] == start_tag] + [c for c in cands if c[0] != start_tag]
@@ -331,12 +345,33 @@ def main():
             continue
         break
 
-    gen_data = generate_options_file()
+    official_tag = ""
+    rels2 = requests.get("https://api.github.com/repos/MorpheApp/morphe-patches/releases").json()
+    for r in rels2:
+        if r.get("draft") or not r.get("prerelease"):
+            continue
+        for a in r.get("assets", []):
+            if a["name"].endswith(".mpp"):
+                download_file(a["browser_download_url"], "bundles/official.mpp")
+                official_tag = r.get("tag_name", "unknown")
+                break
+        else:
+            continue
+        break
+
+    BUNDLES.clear()
+    BUNDLES.append("bundles/dh6k.mpp")
+    if os.path.exists("bundles/official.mpp"):
+        BUNDLES.append("bundles/official.mpp")
+        print(f"Official bundle loaded: {official_tag}")
+
+    gen_data = generate_options_file(BUNDLES)
     if gen_data is None:
         print("WARNING: could not generate options file")
 
-    info = parse_patches_info()
-    bundle_names = set(p["name"] for p in info)
+    info_all = parse_patches_info(BUNDLES)
+    info_dh6k = parse_patches_info(["bundles/dh6k.mpp"])
+    bundle_names = set(p["name"] for p in info_all)
 
     base_wanted = {
         "Brave Origin": {},
@@ -371,10 +406,9 @@ def main():
             print(f"No releases found for {channel}")
             continue
 
-        auto_all = compute_auto(info, CHANNEL_PKG[channel], exclude, set(base_wanted)) if auto_on else []
+        auto_all = compute_auto(info_dh6k, CHANNEL_PKG[channel], exclude, set(base_wanted)) if auto_on else []
         print(f"{channel}: auto-included new patches: {auto_all}")
 
-        # Probe: find a working version with base patches + auto patches
         probe_tag, probe_applied, probe_dropped, _ = find_version(
             cands, base_wanted, auto_all, gen_data, alias, apk_cache, f"probe_{channel}")
 
@@ -400,17 +434,15 @@ def main():
                 cands, wanted, surviving_auto, gen_data, alias, apk_cache,
                 variant['id'], start_tag=probe_tag)
 
-            # Move the final patched apk to its release name
             final_name = f"build/{variant['output_name']}-{tag}-{dh6k_tag}-patched.apk"
             src = f"build/out_{variant['id']}_{tag.replace('.', '_')}.apk"
-            if not os.path.exists(src):
-                src = f"build/out_{variant['id']}_besteffort_{tag.replace('.', '_')}.apk"
             if os.path.exists(src):
                 shutil.copyfile(src, final_name)
 
             release_notes += f"## {variant['output_name']}\n"
             release_notes += f"Brave version: {tag}\n"
-            release_notes += f"Patch bundle: {dh6k_tag}\n\n"
+            bundles_note = dh6k_tag + (f", official {official_tag}" if official_tag else "")
+            release_notes += f"Patch bundles: {bundles_note}\n\n"
             release_notes += "Applied patches:\n"
             release_notes += "\n".join(f"- {a}" for a in applied) if applied else "- none"
             release_notes += "\n"
