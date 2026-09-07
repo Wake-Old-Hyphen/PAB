@@ -1,3 +1,6 @@
+auto_include_new_patches: true
+exclude_patches: []
+
 variants:
   - id: "brave_origin"
     type: "stable"
@@ -22,3 +25,16 @@ variants:
     output_name: "Brave-Beta"
     clone_package: ""
     app_name: ""
+
+extra_apps:
+  - id: tiktok
+    output_name: "TikTok-Patched"
+    bundle_json: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
+    patches: "all"
+    apk:
+      source: "github_release"
+      repo: "hxreborn/Morphe-AutoBuilds"
+      tag: "stock-apks"
+      match: "tiktok"
+      version: "46.2.3"
+      sha256: "2fbe277a568e0e820cb51b09bcf0c0d788dc4fb070e66025f12d11cd3ec16936"
