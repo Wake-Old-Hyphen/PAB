@@ -73,14 +73,22 @@ def ensure_apkeep():
     if os.path.exists(path):
         return path
     rel = requests.get("https://api.github.com/repos/EFForg/apkeep/releases/latest").json()
+    names = [a["name"] for a in rel.get("assets", [])]
+    print(f"apkeep release assets: {names}")
     asset = None
     for a in rel.get("assets", []):
         n = a["name"].lower()
-        if "x86_64" in n and "linux" in n:
+        if "x86_64" in n and "linux" in n and not n.endswith((".deb", ".rpm")):
             asset = a
             break
     if asset is None:
-        raise Exception("no linux apkeep asset found")
+        for a in rel.get("assets", []):
+            n = a["name"].lower()
+            if "linux" in n and not n.endswith((".deb", ".rpm")):
+                asset = a
+                break
+    if asset is None:
+        raise Exception(f"no linux apkeep asset found in {names}")
     raw = "build/apkeep_dl"
     download_file(asset["browser_download_url"], raw)
     if asset["name"].endswith(".tar.gz"):
@@ -97,8 +105,8 @@ def ensure_apkeep():
                 out.write(f.read())
     elif asset["name"].endswith(".zip"):
         with zipfile.ZipFile(raw) as z:
-            names = [n for n in z.namelist() if n.rstrip("/").split("/")[-1] == "apkeep"]
-            data = z.read(names[0] if names else z.namelist()[0])
+            znames = [n for n in z.namelist() if n.rstrip("/").split("/")[-1] == "apkeep"]
+            data = z.read(znames[0] if znames else z.namelist()[0])
             with open(path, "wb") as out:
                 out.write(data)
     else:
@@ -109,19 +117,23 @@ def ensure_apkeep():
 def apkeep_download(apkeep, pkg, version, arch, outdir):
     os.makedirs(outdir, exist_ok=True)
     spec = f"{pkg}@{version}" if version else pkg
-    cmd = [apkeep, "-a", spec, "-d", "apk-pure", "-o", f"arch={arch}", outdir]
-    print("Running:", " ".join(cmd))
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-    print(r.stdout)
-    if r.stderr:
-        print(r.stderr)
-    if r.returncode != 0:
-        return None
-    files = [os.path.join(outdir, f) for f in os.listdir(outdir)]
-    files = [f for f in files if os.path.isfile(f) and is_zip(f)]
-    if not files:
-        return None
-    return max(files, key=os.path.getsize)
+    attempts = [
+        [apkeep, "-a", spec, "-d", "apk-pure", "-o", f"arch={arch}", outdir],
+        [apkeep, "-a", spec, "-o", f"arch={arch}", outdir],
+        [apkeep, "-a", spec, outdir],
+    ]
+    for cmd in attempts:
+        print("Running:", " ".join(cmd))
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        print(r.stdout)
+        if r.stderr:
+            print(r.stderr)
+        if r.returncode == 0:
+            files = [os.path.join(outdir, f) for f in os.listdir(outdir)]
+            files = [f for f in files if os.path.isfile(f) and is_zip(f)]
+            if files:
+                return max(files, key=os.path.getsize)
+    return None
 
 def select_splits(entries, arch, density, languages):
     arch_q = arch.replace("-", "_")
@@ -545,14 +557,45 @@ def build_extra_app(app, alias, release_notes):
                     got = True
         except Exception as e:
             print(f"{aid}: apkeep failed: {e}")
+
+    if not got:
+        vc = str(spec.get("version_code") or "").strip()
+        if spec.get("package") and vc:
+            for host in ("d.apkpure.net", "d.apkpure.com"):
+                url = f"https://{host}/b/XAPK/{spec['package']}?versionCode={vc}"
+                try:
+                    print(f"Trying direct bundle: {url}")
+                    raw = f"build/raw_{aid}.bin"
+                    hdr = {"User-Agent": "Mozilla/5.0"}
+                    with requests.get(url, stream=True, timeout=600, headers=hdr) as r:
+                        if r.status_code == 200:
+                            with open(raw, "wb") as f:
+                                for chunk in r.iter_content(1 << 20):
+                                    f.write(chunk)
+                            if is_zip(raw) and os.path.getsize(raw) > 50_000_000:
+                                with zipfile.ZipFile(raw) as z:
+                                    entries = [n for n in z.namelist() if n.lower().endswith(".apk")]
+                                if entries:
+                                    keep = select_splits(entries, arch, density, languages)
+                                    if keep:
+                                        with zipfile.ZipFile(apk_path, "w", zipfile.ZIP_DEFLATED) as zo:
+                                            for n in keep:
+                                                zo.writestr(os.path.basename(n), z.read(n))
+                                        mode = f"split subset via apkpure ({arch}, {density})"
+                                        got = True
+                                        break
+                except Exception as e:
+                    print(f"direct bundle failed: {e}")
+
     if not got and spec.get("repo") and spec.get("tag"):
         try:
             download_github_release_apk(spec, f"build/base_{aid}.apk")
             apk_path = f"build/base_{aid}.apk"
-            mode = "universal fallback"
+            mode = "universal fallback (full apk + striplibs)"
             got = True
         except Exception as e:
             print(f"{aid}: fallback apk failed: {e}")
+
     if not got:
         release_notes.append(f"## {aid}\nStatus: Failed (apk source)\n\n")
         return
