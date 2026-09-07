@@ -292,6 +292,7 @@ def run_patch(apk_path, out_apk, wanted, gen_data, label, alias, bundles=None):
                 "--keystore-password", os.environ.get("KEYSTORE_PASSWORD", ""),
                 "--keystore-entry-alias", alias,
                 "--keystore-entry-password", os.environ.get("KEY_PASSWORD", "")]
+    cmd += ["--striplibs", "arm64-v8a"]
     cmd += ["-o", out_apk, "--continue-on-error", apk_path]
     print("Running:", " ".join(cmd))
     r = subprocess.run(cmd, capture_output=True, text=True)
