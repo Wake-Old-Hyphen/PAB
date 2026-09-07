@@ -3,6 +3,7 @@ import re
 import yaml
 import json
 import copy
+import hashlib
 import subprocess
 import requests
 import shutil
@@ -53,6 +54,13 @@ def is_valid_mpp(path):
             return f.read(2) == b"PK"
     except Exception:
         return False
+
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 def get_releases(repo):
     return requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=100").json()
@@ -124,15 +132,15 @@ def pick_candidates(releases, channel, latest_stable):
         out.append(stable_cand)
     return out
 
-def generate_options_file(bundles):
+def generate_options_file(bundles, out_path="build/gen_options.json"):
     for sub in ("options", "options-create"):
         cmd = ["java", "-jar", "build/cli.jar", sub]
         for b in bundles:
             cmd += ["-p", b]
-        cmd += ["-o", "build/gen_options.json"]
+        cmd += ["-o", out_path]
         r = subprocess.run(cmd)
-        if r.returncode == 0 and os.path.exists("build/gen_options.json"):
-            with open("build/gen_options.json") as f:
+        if r.returncode == 0 and os.path.exists(out_path):
+            with open(out_path) as f:
                 content = f.read()
             try:
                 return json.loads(content)
@@ -256,9 +264,10 @@ def compute_auto(info, channel_pkg, exclude, configured, needs_value):
             auto.append(n)
     return auto
 
-def run_patch(apk_path, out_apk, wanted, gen_data, label, alias):
+def run_patch(apk_path, out_apk, wanted, gen_data, label, alias, bundles=None):
+    bundles = bundles if bundles is not None else BUNDLES
     cmd = ["java", "-jar", "build/cli.jar", "patch"]
-    for b in BUNDLES:
+    for b in bundles:
         cmd += ["-p", b]
     missing = []
     if gen_data is not None:
@@ -301,7 +310,7 @@ def run_patch(apk_path, out_apk, wanted, gen_data, label, alias):
             failed.append(m)
     return r.returncode == 0, applied, failed, missing
 
-def heal_patch(apk, out_apk, wanted, auto, gen_data, alias, label):
+def heal_patch(apk, out_apk, wanted, auto, gen_data, alias, label, bundles=None):
     auto = list(auto)
     dropped = []
     while True:
@@ -309,7 +318,7 @@ def heal_patch(apk, out_apk, wanted, auto, gen_data, alias, label):
         for n in auto:
             if n not in full:
                 full[n] = {}
-        ok, applied, failed, missing = run_patch(apk, out_apk, full, gen_data, label, alias)
+        ok, applied, failed, missing = run_patch(apk, out_apk, full, gen_data, label, alias, bundles)
         if ok:
             return True, applied, dropped
         auto_failed = [n for n in failed if n in auto]
@@ -344,6 +353,116 @@ def find_version(cands, wanted, auto_all, gen_data, alias, cache, label, start_t
                                       wanted, auto_all, gen_data, alias, f"{label}_besteffort")
     print(f"{label}: no fully working version, best effort on {tag}")
     return tag, applied, dropped, True
+
+def download_bundle_from_json(url, dest):
+    j = requests.get(url).json()
+    ver = j.get("version", "unknown")
+    dl = j.get("download_url")
+    if not dl:
+        raise Exception(f"bundle json has no download_url: {url}")
+    download_file(dl, dest)
+    return ver
+
+def download_github_release_apk(spec, dest):
+    repo = spec["repo"]
+    tag = spec["tag"]
+    match = (spec.get("match") or "").lower()
+    rel = requests.get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}").json()
+    assets = rel.get("assets", [])
+    print(f"stock release assets: {[a['name'] for a in assets]}")
+    chosen = None
+    if match:
+        hits = [a for a in assets if match in a["name"].lower()]
+        if hits:
+            chosen = hits[0]
+    if chosen is None and len(assets) == 1:
+        chosen = assets[0]
+    if chosen is None:
+        hits = [a for a in assets if "arm64" in a["name"].lower()]
+        if hits:
+            chosen = hits[0]
+    if chosen is None:
+        raise Exception(f"No matching APK asset in {repo}@{tag}")
+    download_file(chosen["browser_download_url"], dest)
+    expected = (spec.get("sha256") or "").strip().lower()
+    if expected:
+        actual = sha256_of(dest)
+        print(f"sha256 expected: {expected}")
+        print(f"sha256 actual:   {actual}")
+        if actual != expected:
+            raise Exception("SHA256 mismatch for stock APK")
+    return chosen["name"]
+
+def build_extra_app(app, alias, release_notes):
+    aid = app["id"]
+    print(f"\n=== Extra app: {aid} ===")
+    mpp = f"bundles/{aid}.mpp"
+    try:
+        bver = download_bundle_from_json(app["bundle_json"], mpp)
+    except Exception as e:
+        print(f"{aid}: bundle download failed: {e}")
+        release_notes.append((f"## {app['output_name']}\nStatus: Failed (bundle download)\n\n"))
+        return
+    if not is_valid_mpp(mpp):
+        print(f"{aid}: bundle file invalid")
+        release_notes.append((f"## {app['output_name']}\nStatus: Failed (invalid bundle)\n\n"))
+        return
+
+    apk_path = f"build/base_{aid}.apk"
+    try:
+        asset_name = download_github_release_apk(app["apk"], apk_path)
+    except Exception as e:
+        print(f"{aid}: apk download failed: {e}")
+        release_notes.append((f"## {app['output_name']}\nStatus: Failed (apk download: {e})\n\n"))
+        return
+
+    gen = generate_options_file([mpp], out_path=f"build/gen_{aid}.json")
+    if gen is None:
+        print(f"{aid}: could not generate options file")
+        release_notes.append((f"## {app['output_name']}\nStatus: Failed (options generation)\n\n"))
+        return
+
+    all_names = set()
+    for bundle in gen:
+        all_names |= set((bundle.get("patches") or {}).keys())
+    needs = needs_value_names(gen)
+    skipped = sorted(needs)
+
+    if str(app.get("patches", "all")).lower() == "all":
+        wanted = {n: {} for n in sorted(all_names - needs)}
+    else:
+        wanted = {n: {} for n in app.get("patches", []) if n in all_names}
+        skipped += sorted(set(app.get("patches", [])) - all_names)
+
+    print(f"{aid}: enabling {len(wanted)} patches, skipping {skipped}")
+
+    out_apk = f"build/out_{aid}.apk"
+    ok, applied, dropped = heal_patch(apk_path, out_apk, wanted, list(wanted), gen, alias,
+                                      f"{aid}_full", bundles=[mpp])
+
+    if not applied:
+        ok = False
+
+    apk_ver = app["apk"].get("version", "unknown")
+    if ok and os.path.exists(out_apk):
+        final = f"build/{app['output_name']}-{apk_ver}-{bver}-patched.apk"
+        shutil.copyfile(out_apk, final)
+        note = f"## {app['output_name']}\n"
+        note += f"App version: {apk_ver}\n"
+        note += f"Patch bundle: {bver}\n\n"
+        note += "Applied patches:\n"
+        note += "\n".join(f"- {a}" for a in applied) if applied else "- none"
+        note += "\n"
+        if dropped:
+            note += "\nDropped after failure (rebuilt without it):\n"
+            note += "\n".join(f"- {d}" for d in dropped) + "\n"
+        if skipped:
+            note += "\nSkipped (needs custom values or not in bundle):\n"
+            note += "\n".join(f"- {s}" for s in skipped) + "\n"
+        note += "\nStatus: Success\n\n"
+        release_notes.append(note)
+    else:
+        release_notes.append(f"## {app['output_name']}\nStatus: Failed\n\n")
 
 def main():
     with open('config.yaml', 'r') as f:
@@ -411,7 +530,6 @@ def main():
 
     info_dh6k = parse_patches_info(["bundles/dh6k.mpp"])
 
-    # Authoritative patch names: the options file the CLI itself generated
     bundle_names = set()
     for bundle in gen_data or []:
         bundle_names |= set((bundle.get("patches") or {}).keys())
@@ -445,7 +563,7 @@ def main():
     print(f"True stable (Latest badge): {latest_stable.get('tag_name')}")
 
     apk_cache = {}
-    release_notes = "# Morphe AutoBuilds Release\n\n"
+    notes = []
 
     for channel in ["stable", "nightly", "beta"]:
         cands = pick_candidates(brave_releases, channel, latest_stable)
@@ -500,23 +618,27 @@ def main():
             if os.path.exists(src):
                 shutil.copyfile(src, final_name)
 
-            release_notes += f"## {variant['output_name']}\n"
-            release_notes += f"Brave version: {tag}\n"
+            note = f"## {variant['output_name']}\n"
+            note += f"Brave version: {tag}\n"
             bundles_note = dh6k_tag + (f", official {official_tag}" if official_tag else "")
-            release_notes += f"Patch bundles: {bundles_note}\n\n"
-            release_notes += "Applied patches:\n"
-            release_notes += "\n".join(f"- {a}" for a in applied) if applied else "- none"
-            release_notes += "\n"
+            note += f"Patch bundles: {bundles_note}\n\n"
+            note += "Applied patches:\n"
+            note += "\n".join(f"- {a}" for a in applied) if applied else "- none"
+            note += "\n"
             if dropped:
-                release_notes += "\nDropped after failure (rebuilt without it):\n"
-                release_notes += "\n".join(f"- {d}" for d in dropped) + "\n"
+                note += "\nDropped after failure (rebuilt without it):\n"
+                note += "\n".join(f"- {d}" for d in dropped) + "\n"
             if skipped:
-                release_notes += "\nSkipped (needs custom values or not in bundle):\n"
-                release_notes += "\n".join(f"- {s}" for s in skipped) + "\n"
-            release_notes += "\nStatus: " + ("Best effort (some patches failed)" if best_effort else "Success") + "\n\n"
+                note += "\nSkipped (needs custom values or not in bundle):\n"
+                note += "\n".join(f"- {s}" for s in skipped) + "\n"
+            note += "\nStatus: " + ("Best effort (some patches failed)" if best_effort else "Success") + "\n\n"
+            notes.append(note)
+
+    for app in config.get("extra_apps", []) or []:
+        build_extra_app(app, alias, notes)
 
     with open('release_notes.md', 'w') as f:
-        f.write(release_notes)
+        f.write("# Morphe AutoBuilds Release\n\n" + "".join(notes))
 
 if __name__ == "__main__":
     main()
