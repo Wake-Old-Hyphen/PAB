@@ -35,6 +35,6 @@ extra_apps:
       source: "github_release"
       repo: "hxreborn/Morphe-AutoBuilds"
       tag: "stock-apks"
-      match: "tiktok"
+      match: "com.zhiliaoapp.musically-46.2.3"
       version: "46.2.3"
       sha256: "2fbe277a568e0e820cb51b09bcf0c0d788dc4fb070e66025f12d11cd3ec16936"
