@@ -4,6 +4,9 @@ import yaml
 import json
 import copy
 import hashlib
+import zipfile
+import tarfile
+import stat
 import subprocess
 import requests
 import shutil
@@ -48,7 +51,7 @@ def download_file(url, dest):
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
 
-def is_valid_mpp(path):
+def is_zip(path):
     try:
         with open(path, "rb") as f:
             return f.read(2) == b"PK"
@@ -61,6 +64,61 @@ def sha256_of(path):
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+def ensure_apkeep():
+    path = "build/apkeep"
+    if os.path.exists(path):
+        return path
+    rel = requests.get("https://api.github.com/repos/EFForg/apkeep/releases/latest").json()
+    asset = None
+    for a in rel.get("assets", []):
+        n = a["name"].lower()
+        if "x86_64" in n and "linux" in n:
+            asset = a
+            break
+    if asset is None:
+        raise Exception("no linux apkeep asset found")
+    raw = "build/apkeep_dl"
+    download_file(asset["browser_download_url"], raw)
+    if asset["name"].endswith(".tar.gz"):
+        with tarfile.open(raw) as t:
+            mem = None
+            for m in t.getmembers():
+                if m.isfile() and m.name.rstrip("/").split("/")[-1] == "apkeep":
+                    mem = m
+                    break
+            if mem is None:
+                mem = next(m for m in t.getmembers() if m.isfile())
+            f = t.extractfile(mem)
+            with open(path, "wb") as out:
+                out.write(f.read())
+    elif asset["name"].endswith(".zip"):
+        with zipfile.ZipFile(raw) as z:
+            names = [n for n in z.namelist() if n.rstrip("/").split("/")[-1] == "apkeep"]
+            data = z.read(names[0] if names else z.namelist()[0])
+            with open(path, "wb") as out:
+                out.write(data)
+    else:
+        shutil.move(raw, path)
+    os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return path
+
+def apkeep_download(apkeep, pkg, version, arch, outdir):
+    os.makedirs(outdir, exist_ok=True)
+    spec = f"{pkg}@{version}" if version else pkg
+    cmd = [apkeep, "-a", spec, "-d", "apk-pure", "-o", f"arch={arch}", outdir]
+    print("Running:", " ".join(cmd))
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    print(r.stdout)
+    if r.stderr:
+        print(r.stderr)
+    if r.returncode != 0:
+        return None
+    files = [os.path.join(outdir, f) for f in os.listdir(outdir)]
+    files = [f for f in files if os.path.isfile(f) and is_zip(f)]
+    if not files:
+        return None
+    return max(files, key=os.path.getsize)
 
 def get_releases(repo):
     return requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=100").json()
@@ -394,6 +452,32 @@ def download_github_release_apk(spec, dest):
             raise Exception("SHA256 mismatch for stock APK")
     return chosen["name"]
 
+def make_split_apkm(raw, density, out_path):
+    with zipfile.ZipFile(raw) as z:
+        entries = [n for n in z.namelist() if n.lower().endswith(".apk")]
+        if not entries:
+            return None
+        bn = lambda n: os.path.basename(n).lower()
+        base = [n for n in entries if "config." not in bn(n)]
+        arm = [n for n in entries if "arm64-v8a" in bn(n)]
+        if not base or not arm:
+            return None
+        dens = []
+        if density:
+            for d in [density, "nodpi", "anydpi", "xxhdpi", "xxxhdpi", "hdpi", "mdpi"]:
+                hits = [n for n in entries if f"config.{d}" in bn(n)]
+                if hits:
+                    dens = hits
+                    break
+        else:
+            dens = [n for n in entries if "dpi" in bn(n)]
+        keep = base + arm + dens
+        print(f"keeping splits: {[os.path.basename(k) for k in keep]}")
+        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zo:
+            for n in keep:
+                zo.writestr(os.path.basename(n), z.read(n))
+    return out_path
+
 def build_extra_app(app, alias, release_notes):
     aid = app["id"]
     print(f"\n=== Extra app: {aid} ===")
@@ -404,18 +488,50 @@ def build_extra_app(app, alias, release_notes):
         print(f"{aid}: bundle download failed: {e}")
         release_notes.append((f"## {app['output_name']}\nStatus: Failed (bundle download)\n\n"))
         return
-    if not is_valid_mpp(mpp):
+    if not is_zip(mpp):
         print(f"{aid}: bundle file invalid")
         release_notes.append((f"## {app['output_name']}\nStatus: Failed (invalid bundle)\n\n"))
         return
 
+    spec = app["apk"]
+    density = (app.get("density") or "").strip()
+    arch = spec.get("arch", "arm64-v8a")
     apk_path = f"build/base_{aid}.apk"
-    try:
-        asset_name = download_github_release_apk(app["apk"], apk_path)
-    except Exception as e:
-        print(f"{aid}: apk download failed: {e}")
-        release_notes.append((f"## {app['output_name']}\nStatus: Failed (apk download: {e})\n\n"))
-        return
+    mode = "universal (full apk + striplibs)"
+    got = False
+
+    if spec.get("source", "apkeep") == "apkeep":
+        try:
+            apkeep = ensure_apkeep()
+            bundle = apkeep_download(apkeep, spec.get("package", ""), spec.get("version", ""),
+                                     arch, f"build/apkeep_{aid}")
+            if bundle:
+                with zipfile.ZipFile(bundle) as z:
+                    names = [n for n in z.namelist() if n.lower().endswith(".apk")]
+                if names:
+                    sub = f"build/subset_{aid}.apkm"
+                    if make_split_apkm(bundle, density, sub):
+                        apk_path = sub
+                        mode = f"split bundle ({density or 'all densities'}, {arch})"
+                        got = True
+                else:
+                    apk_path = bundle
+                    mode = f"single apk from apkeep ({arch})"
+                    got = True
+        except Exception as e:
+            print(f"{aid}: apkeep failed: {e}")
+
+    if not got:
+        if spec.get("repo") and spec.get("tag"):
+            try:
+                download_github_release_apk(spec, apk_path)
+            except Exception as e:
+                print(f"{aid}: apk download failed: {e}")
+                release_notes.append((f"## {app['output_name']}\nStatus: Failed (apk download: {e})\n\n"))
+                return
+        else:
+            release_notes.append((f"## {app['output_name']}\nStatus: Failed (no apk source available)\n\n"))
+            return
 
     gen = generate_options_file([mpp], out_path=f"build/gen_{aid}.json")
     if gen is None:
@@ -444,13 +560,14 @@ def build_extra_app(app, alias, release_notes):
     if not applied:
         ok = False
 
-    apk_ver = app["apk"].get("version", "unknown")
+    apk_ver = spec.get("version", "unknown")
     if ok and os.path.exists(out_apk):
         final = f"build/{app['output_name']}-{apk_ver}-{bver}-patched.apk"
         shutil.copyfile(out_apk, final)
         note = f"## {app['output_name']}\n"
         note += f"App version: {apk_ver}\n"
-        note += f"Patch bundle: {bver}\n\n"
+        note += f"Patch bundle: {bver}\n"
+        note += f"Build mode: {mode}\n\n"
         note += "Applied patches:\n"
         note += "\n".join(f"- {a}" for a in applied) if applied else "- none"
         note += "\n"
@@ -514,7 +631,7 @@ def main():
             continue
         break
 
-    if os.path.exists("bundles/official.mpp") and not is_valid_mpp("bundles/official.mpp"):
+    if os.path.exists("bundles/official.mpp") and not is_zip("bundles/official.mpp"):
         print("WARNING: official bundle file invalid, discarding")
         os.remove("bundles/official.mpp")
         official_tag = ""
