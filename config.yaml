@@ -35,7 +35,12 @@ extra_apps:
       source: "apkeep"
       package: "com.zhiliaoapp.musically"
       version: "46.2.3"
+      version_code: "2024602030"
       arch: "arm64-v8a"
+      repo: "hxreborn/Morphe-AutoBuilds"
+      tag: "stock-apks"
+      match: "46.2.3"
+      sha256: "2fbe277a568e0e820cb51b09bcf0c0d788dc4fb070e66025f12d11cd3ec16936"
     variants:
       - id: "TikTok-HXReborn"
         bundles:
