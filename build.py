@@ -23,6 +23,9 @@ CHANNEL_PKG = {
 
 BUNDLES = []
 
+ABI_QUALS = {"arm64_v8a", "armeabi_v7a", "armeabi", "x86", "x86_64", "mips"}
+DPI_QUALS = {"ldpi", "mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi", "nodpi", "anydpi", "tvdpi"}
+
 def parse_ver(tag):
     try:
         nums = (tag or "").lower().lstrip("v").split(".")
@@ -120,11 +123,57 @@ def apkeep_download(apkeep, pkg, version, arch, outdir):
         return None
     return max(files, key=os.path.getsize)
 
+def select_splits(entries, arch, density, languages):
+    arch_q = arch.replace("-", "_")
+    keep = []
+    for n in entries:
+        b = os.path.basename(n).lower()
+        if ".config." not in b:
+            keep.append(n)
+            continue
+        qual = b.split(".config.")[-1].replace(".apk", "")
+        if qual in ABI_QUALS:
+            if qual == arch_q:
+                keep.append(n)
+        elif qual in DPI_QUALS:
+            if qual == density:
+                keep.append(n)
+        elif qual.isalpha() and len(qual) <= 3:
+            if qual in languages:
+                keep.append(n)
+        else:
+            keep.append(n)
+    return keep
+
 def get_releases(repo):
     return requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=100").json()
 
 def get_latest_stable(repo):
     return requests.get(f"https://api.github.com/repos/{repo}/releases/latest").json()
+
+def get_release_status(repo, version):
+    if not repo:
+        return "unknown"
+    try:
+        for r in get_releases(repo):
+            t = (r.get("tag_name") or "").lower().lstrip("v")
+            if t == str(version).lower().lstrip("v"):
+                return "prerelease" if r.get("prerelease") else "stable"
+    except Exception:
+        pass
+    return "unknown"
+
+def repo_from_url(url):
+    m = re.search(r"raw\.githubusercontent\.com/([^/]+/[^/]+)/", url)
+    if m:
+        return m.group(1)
+    m = re.search(r"bundle/([^/]+/[^/]+)/", url)
+    if m:
+        return m.group(1)
+    m = re.search(r"github\.com/([^/]+/[^/]+)/", url)
+    if m:
+        return m.group(1)
+    return None
 
 def find_asset(release):
     for a in release.get("assets", []):
@@ -227,20 +276,24 @@ def apply_option(entry, key, value):
         return
     set_option_value(opts, key, value)
 
-def make_variant_options(gen_data, wanted):
+def make_variant_options(gen_data, wanted, per_bundle=None):
     data = copy.deepcopy(gen_data)
     found = set()
-    for bundle in data:
-        patches = bundle.get("patches", {})
-        for name, entry in patches.items():
-            if name in wanted:
+    for i, bundle in enumerate(data):
+        w = per_bundle[i] if (per_bundle is not None and i < len(per_bundle)) else wanted
+        for name, entry in (bundle.get("patches") or {}).items():
+            if name in w:
                 found.add(name)
                 entry["enabled"] = True
-                for k, v in wanted[name].items():
+                for k, v in w[name].items():
                     apply_option(entry, k, v)
             else:
                 entry["enabled"] = False
-    missing = [n for n in wanted if n not in found]
+    allw = set(wanted)
+    if per_bundle:
+        for d in per_bundle:
+            allw |= set(d)
+    missing = [n for n in sorted(allw) if n not in found]
     return data, missing
 
 def needs_value_names(gen_data):
@@ -322,14 +375,14 @@ def compute_auto(info, channel_pkg, exclude, configured, needs_value):
             auto.append(n)
     return auto
 
-def run_patch(apk_path, out_apk, wanted, gen_data, label, alias, bundles=None):
+def run_patch(apk_path, out_apk, wanted, gen_data, label, alias, bundles=None, per_bundle=None):
     bundles = bundles if bundles is not None else BUNDLES
     cmd = ["java", "-jar", "build/cli.jar", "patch"]
     for b in bundles:
         cmd += ["-p", b]
     missing = []
     if gen_data is not None:
-        data, missing = make_variant_options(gen_data, wanted)
+        data, missing = make_variant_options(gen_data, wanted, per_bundle)
         opts_path = f"build/options_{label}.json"
         with open(opts_path, "w") as f:
             json.dump(data, f, indent=2)
@@ -369,15 +422,17 @@ def run_patch(apk_path, out_apk, wanted, gen_data, label, alias, bundles=None):
             failed.append(m)
     return r.returncode == 0, applied, failed, missing
 
-def heal_patch(apk, out_apk, wanted, auto, gen_data, alias, label, bundles=None):
+def heal_patch(apk, out_apk, wanted, auto, gen_data, alias, label, bundles=None, per_bundle=None):
     auto = list(auto)
     dropped = []
+    wanted = dict(wanted)
+    pb = [dict(d) for d in per_bundle] if per_bundle else None
     while True:
         full = dict(wanted)
         for n in auto:
             if n not in full:
                 full[n] = {}
-        ok, applied, failed, missing = run_patch(apk, out_apk, full, gen_data, label, alias, bundles)
+        ok, applied, failed, missing = run_patch(apk, out_apk, full, gen_data, label, alias, bundles, pb)
         if ok:
             return True, applied, dropped
         auto_failed = [n for n in failed if n in auto]
@@ -386,6 +441,10 @@ def heal_patch(apk, out_apk, wanted, auto, gen_data, alias, label, bundles=None)
         for n in auto_failed:
             auto.remove(n)
             dropped.append(n)
+            wanted.pop(n, None)
+            if pb:
+                for d in pb:
+                    d.pop(n, None)
 
 def get_apk(tag, url, cache):
     if tag not in cache:
@@ -452,135 +511,126 @@ def download_github_release_apk(spec, dest):
             raise Exception("SHA256 mismatch for stock APK")
     return chosen["name"]
 
-def make_split_apkm(raw, density, out_path):
-    with zipfile.ZipFile(raw) as z:
-        entries = [n for n in z.namelist() if n.lower().endswith(".apk")]
-        if not entries:
-            return None
-        bn = lambda n: os.path.basename(n).lower()
-        base = [n for n in entries if "config." not in bn(n)]
-        arm = [n for n in entries if "arm64-v8a" in bn(n)]
-        if not base or not arm:
-            return None
-        dens = []
-        if density:
-            for d in [density, "nodpi", "anydpi", "xxhdpi", "xxxhdpi", "hdpi", "mdpi"]:
-                hits = [n for n in entries if f"config.{d}" in bn(n)]
-                if hits:
-                    dens = hits
-                    break
-        else:
-            dens = [n for n in entries if "dpi" in bn(n)]
-        keep = base + arm + dens
-        print(f"keeping splits: {[os.path.basename(k) for k in keep]}")
-        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zo:
-            for n in keep:
-                zo.writestr(os.path.basename(n), z.read(n))
-    return out_path
-
 def build_extra_app(app, alias, release_notes):
     aid = app["id"]
     print(f"\n=== Extra app: {aid} ===")
-    mpp = f"bundles/{aid}.mpp"
-    try:
-        bver = download_bundle_from_json(app["bundle_json"], mpp)
-    except Exception as e:
-        print(f"{aid}: bundle download failed: {e}")
-        release_notes.append((f"## {app['output_name']}\nStatus: Failed (bundle download)\n\n"))
-        return
-    if not is_zip(mpp):
-        print(f"{aid}: bundle file invalid")
-        release_notes.append((f"## {app['output_name']}\nStatus: Failed (invalid bundle)\n\n"))
-        return
-
     spec = app["apk"]
-    density = (app.get("density") or "").strip()
+    appver = spec.get("version", "unknown")
     arch = spec.get("arch", "arm64-v8a")
-    apk_path = f"build/base_{aid}.apk"
-    mode = "universal (full apk + striplibs)"
-    got = False
+    density = (app.get("density") or "xxhdpi").strip()
+    languages = [l.lower() for l in (app.get("languages") or ["en"])]
 
+    apk_path = f"build/base_{aid}.apkm"
+    mode = ""
+    got = False
     if spec.get("source", "apkeep") == "apkeep":
         try:
             apkeep = ensure_apkeep()
-            bundle = apkeep_download(apkeep, spec.get("package", ""), spec.get("version", ""),
-                                     arch, f"build/apkeep_{aid}")
+            bundle = apkeep_download(apkeep, spec.get("package", ""), appver, arch, f"build/apkeep_{aid}")
             if bundle:
                 with zipfile.ZipFile(bundle) as z:
-                    names = [n for n in z.namelist() if n.lower().endswith(".apk")]
-                if names:
-                    sub = f"build/subset_{aid}.apkm"
-                    if make_split_apkm(bundle, density, sub):
-                        apk_path = sub
-                        mode = f"split bundle ({density or 'all densities'}, {arch})"
+                    entries = [n for n in z.namelist() if n.lower().endswith(".apk")]
+                if entries:
+                    keep = select_splits(entries, arch, density, languages)
+                    if keep:
+                        with zipfile.ZipFile(apk_path, "w", zipfile.ZIP_DEFLATED) as zo:
+                            for n in keep:
+                                zo.writestr(os.path.basename(n), z.read(n))
+                        mode = f"split subset ({arch}, {density}, {'/'.join(languages)})"
                         got = True
+                        print(f"{aid}: kept {len(keep)} of {len(entries)} splits")
                 else:
-                    apk_path = bundle
-                    mode = f"single apk from apkeep ({arch})"
+                    shutil.copyfile(bundle, apk_path)
+                    mode = f"single apk ({arch})"
                     got = True
         except Exception as e:
             print(f"{aid}: apkeep failed: {e}")
-
+    if not got and spec.get("repo") and spec.get("tag"):
+        try:
+            download_github_release_apk(spec, f"build/base_{aid}.apk")
+            apk_path = f"build/base_{aid}.apk"
+            mode = "universal fallback"
+            got = True
+        except Exception as e:
+            print(f"{aid}: fallback apk failed: {e}")
     if not got:
-        if spec.get("repo") and spec.get("tag"):
-            try:
-                download_github_release_apk(spec, apk_path)
-            except Exception as e:
-                print(f"{aid}: apk download failed: {e}")
-                release_notes.append((f"## {app['output_name']}\nStatus: Failed (apk download: {e})\n\n"))
-                return
-        else:
-            release_notes.append((f"## {app['output_name']}\nStatus: Failed (no apk source available)\n\n"))
-            return
-
-    gen = generate_options_file([mpp], out_path=f"build/gen_{aid}.json")
-    if gen is None:
-        print(f"{aid}: could not generate options file")
-        release_notes.append((f"## {app['output_name']}\nStatus: Failed (options generation)\n\n"))
+        release_notes.append(f"## {aid}\nStatus: Failed (apk source)\n\n")
         return
 
-    all_names = set()
-    for bundle in gen:
-        all_names |= set((bundle.get("patches") or {}).keys())
-    needs = needs_value_names(gen)
-    skipped = sorted(needs)
+    for variant in app.get("variants", []):
+        vid = variant["id"]
+        mpps = []
+        ok_bundles = True
+        for b in variant["bundles"]:
+            mpp = f"bundles/{aid}_{b['label']}.mpp"
+            try:
+                ver = download_bundle_from_json(b["url"], mpp)
+            except Exception as e:
+                print(f"{vid}: bundle {b['label']} failed: {e}")
+                ok_bundles = False
+                break
+            b["_ver"] = ver
+            b["_status"] = get_release_status(repo_from_url(b["url"]), ver)
+            mpps.append(mpp)
+        if not ok_bundles or not mpps:
+            release_notes.append(f"## {vid}\nStatus: Failed (bundle download)\n\n")
+            continue
 
-    if str(app.get("patches", "all")).lower() == "all":
-        wanted = {n: {} for n in sorted(all_names - needs)}
-    else:
-        wanted = {n: {} for n in app.get("patches", []) if n in all_names}
-        skipped += sorted(set(app.get("patches", [])) - all_names)
+        gen = generate_options_file(mpps, out_path=f"build/gen_{vid}.json")
+        if gen is None:
+            release_notes.append(f"## {vid}\nStatus: Failed (options generation)\n\n")
+            continue
 
-    print(f"{aid}: enabling {len(wanted)} patches, skipping {skipped}")
+        names_per = [set((g.get("patches") or {}).keys()) for g in gen]
+        needs_per = [needs_value_names([g]) for g in gen]
+        exclusive = bool(variant.get("merge_exclusive"))
+        per_bundle = []
+        lowers_seen = set()
+        dup_skipped = []
+        for i in range(len(gen)):
+            w = {}
+            for n in sorted(names_per[i] - needs_per[i]):
+                if exclusive and i > 0 and n.lower() in lowers_seen:
+                    dup_skipped.append(n)
+                    continue
+                w[n] = {}
+                lowers_seen.add(n.lower())
+            per_bundle.append(w)
+        wanted = {n: {} for d in per_bundle for n in d}
+        skipped = sorted(set().union(*[set(x) for x in needs_per])) if needs_per else []
+        print(f"{vid}: enabling {len(wanted)} patches, dup skipped {len(dup_skipped)}, needs skipped {len(skipped)}")
 
-    out_apk = f"build/out_{aid}.apk"
-    ok, applied, dropped = heal_patch(apk_path, out_apk, wanted, list(wanted), gen, alias,
-                                      f"{aid}_full", bundles=[mpp])
+        out_apk = f"build/out_{vid}.apk"
+        ok, applied, dropped = heal_patch(apk_path, out_apk, wanted, list(wanted), gen, alias,
+                                          f"{vid}_full", bundles=mpps, per_bundle=per_bundle)
+        if not applied:
+            ok = False
 
-    if not applied:
-        ok = False
-
-    apk_ver = spec.get("version", "unknown")
-    if ok and os.path.exists(out_apk):
-        final = f"build/{app['output_name']}-{apk_ver}-{bver}-patched.apk"
-        shutil.copyfile(out_apk, final)
-        note = f"## {app['output_name']}\n"
-        note += f"App version: {apk_ver}\n"
-        note += f"Patch bundle: {bver}\n"
-        note += f"Build mode: {mode}\n\n"
-        note += "Applied patches:\n"
-        note += "\n".join(f"- {a}" for a in applied) if applied else "- none"
-        note += "\n"
-        if dropped:
-            note += "\nDropped after failure (rebuilt without it):\n"
-            note += "\n".join(f"- {d}" for d in dropped) + "\n"
-        if skipped:
-            note += "\nSkipped (needs custom values or not in bundle):\n"
-            note += "\n".join(f"- {s}" for s in skipped) + "\n"
-        note += "\nStatus: Success\n\n"
-        release_notes.append(note)
-    else:
-        release_notes.append(f"## {app['output_name']}\nStatus: Failed\n\n")
+        parts = [f"{b['label']}_v{b.get('_ver', '?')}-{b.get('_status', '?')}" for b in variant["bundles"]]
+        joined = "_X_".join(parts)
+        if ok and os.path.exists(out_apk):
+            final = f"build/{app.get('output_base', aid)}-{appver}-{joined}-patched.apk"
+            shutil.copyfile(out_apk, final)
+            note = f"## {vid}\n"
+            note += f"App version: {appver}\n"
+            note += f"Bundles: {', '.join(parts)}\n"
+            note += f"Build mode: {mode}\n\n"
+            note += "Applied patches:\n"
+            note += "\n".join(f"- {a}" for a in applied) if applied else "- none"
+            note += "\n"
+            if dropped:
+                note += "\nDropped after failure (rebuilt without it):\n"
+                note += "\n".join(f"- {d}" for d in dropped) + "\n"
+            if dup_skipped:
+                note += "\nDuplicate of earlier bundle (skipped):\n"
+                note += "\n".join(f"- {d}" for d in dup_skipped) + "\n"
+            if skipped:
+                note += "\nSkipped (needs custom values):\n"
+                note += "\n".join(f"- {s}" for s in skipped) + "\n"
+            note += "\nStatus: Success\n\n"
+            release_notes.append(note)
+        else:
+            release_notes.append(f"## {vid}\nStatus: Failed\n\n")
 
 def main():
     with open('config.yaml', 'r') as f:
