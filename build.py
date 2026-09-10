@@ -288,24 +288,50 @@ def apply_option(entry, key, value):
         return
     set_option_value(opts, key, value)
 
+def enable_entry(entry, vals):
+    entry["enabled"] = True
+    applied = {}
+    for k, v in vals.items():
+        apply_option(entry, k, v)
+        applied[k.lower()] = v
+    pkg = applied.get("packagename")
+    if pkg:
+        for k in list((entry.get("options") or {})):
+            kl = k.lower()
+            if "package" in kl or "provider" in kl:
+                set_option_value(entry["options"], k, pkg)
+
 def make_variant_options(gen_data, wanted, per_bundle=None):
     data = copy.deepcopy(gen_data)
     found = set()
-    for i, bundle in enumerate(data):
-        w = per_bundle[i] if (per_bundle is not None and i < len(per_bundle)) else wanted
-        for name, entry in (bundle.get("patches") or {}).items():
-            if name in w:
-                found.add(name)
-                entry["enabled"] = True
-                for k, v in w[name].items():
-                    apply_option(entry, k, v)
-            else:
-                entry["enabled"] = False
-    allw = set(wanted)
-    if per_bundle:
+    if per_bundle is not None:
+        for i, bundle in enumerate(data):
+            w = per_bundle[i] if i < len(per_bundle) else {}
+            for name, entry in (bundle.get("patches") or {}).items():
+                if name in w:
+                    found.add(name)
+                    enable_entry(entry, w[name])
+                else:
+                    entry["enabled"] = False
+        allw = set()
         for d in per_bundle:
             allw |= set(d)
-    missing = [n for n in sorted(allw) if n not in found]
+        missing = [n for n in sorted(allw) if n not in found]
+        return data, missing
+
+    owners = {}
+    for name in wanted:
+        idxs = [j for j, b in enumerate(data) if name in (b.get("patches") or {})]
+        if idxs:
+            owners[name] = idxs[-1] if name.lower() == "clone app" else idxs[0]
+    for i, bundle in enumerate(data):
+        for name, entry in (bundle.get("patches") or {}).items():
+            if name in wanted and owners.get(name) == i:
+                found.add(name)
+                enable_entry(entry, wanted[name])
+            else:
+                entry["enabled"] = False
+    missing = [n for n in sorted(wanted) if n not in found]
     return data, missing
 
 def needs_value_names(gen_data):
@@ -340,6 +366,30 @@ def detect_alias():
     except Exception as e:
         print("alias detection failed:", e)
     return preferred
+
+def keystore_fingerprint(alias):
+    ks = "signing/keystore.jks"
+    pw = os.environ.get("KEYSTORE_PASSWORD", "")
+    r = subprocess.run(["keytool", "-list", "-v", "-keystore", ks, "-storepass", pw, "-alias", alias],
+                       capture_output=True, text=True)
+    m = re.search(r"SHA-?256:\s*([0-9A-Fa-f:]+)", r.stdout)
+    return m.group(1).upper() if m else None
+
+def apk_fingerprint(path):
+    r = subprocess.run(["keytool", "-printcert", "-jarfile", path], capture_output=True, text=True)
+    m = re.search(r"SHA-?256:\s*([0-9A-Fa-f:]+)", r.stdout)
+    return m.group(1).upper() if m else None
+
+def verify_signature(path, ks_fp):
+    fp = apk_fingerprint(path)
+    if fp is None:
+        print(f"signature check: no v1 certificate readable in {path}, skipping compare")
+        return None, True
+    match = (fp == ks_fp) if ks_fp else None
+    print(f"signature check: apk={fp} keystore={ks_fp} match={match}")
+    if match is False:
+        print(f"WARNING: signature differs from keystore: {path}")
+    return fp, match
 
 def parse_patches_info(bundles):
     cmd = ["java", "-jar", "build/cli.jar", "list-patches"]
@@ -523,7 +573,7 @@ def download_github_release_apk(spec, dest):
             raise Exception("SHA256 mismatch for stock APK")
     return chosen["name"]
 
-def build_extra_app(app, alias, release_notes):
+def build_extra_app(app, alias, ks_fp, release_notes):
     aid = app["id"]
     print(f"\n=== Extra app: {aid} ===")
     spec = app["apk"]
@@ -652,13 +702,18 @@ def build_extra_app(app, alias, release_notes):
         parts = [f"{b['label']}_v{b.get('_ver', '?')}-{b.get('_status', '?')}" for b in variant["bundles"]]
         joined = "_X_".join(parts)
         if ok and os.path.exists(out_apk):
+            fp, match = verify_signature(out_apk, ks_fp)
             final = f"build/{app.get('output_base', aid)}-{appver}-{joined}-patched.apk"
             shutil.copyfile(out_apk, final)
             note = f"## {vid}\n"
             note += f"App version: {appver}\n"
             note += f"Bundles: {', '.join(parts)}\n"
-            note += f"Build mode: {mode}\n\n"
-            note += "Applied patches:\n"
+            note += f"Build mode: {mode}\n"
+            if fp:
+                note += f"Signing fingerprint: {fp}\n"
+                if match is False:
+                    note += "WARNING: signature differs from keystore\n"
+            note += "\nApplied patches:\n"
             note += "\n".join(f"- {a}" for a in applied) if applied else "- none"
             note += "\n"
             if dropped:
@@ -693,6 +748,8 @@ def main():
 
     alias = detect_alias()
     print(f"Using signing alias: {alias}")
+    ks_fp = keystore_fingerprint(alias)
+    print(f"Keystore signing fingerprint: {ks_fp}")
 
     get_latest_cli_jar()
 
@@ -826,14 +883,22 @@ def main():
 
             final_name = f"build/{variant['output_name']}-{tag}-{dh6k_tag}-patched.apk"
             src = f"build/out_{variant['id']}_{tag.replace('.', '_')}.apk"
+            fp, match = (None, None)
             if os.path.exists(src):
+                fp, match = verify_signature(src, ks_fp)
                 shutil.copyfile(src, final_name)
 
             note = f"## {variant['output_name']}\n"
             note += f"Brave version: {tag}\n"
+            if variant.get('clone_package') == CHANNEL_PKG['stable']:
+                note += "Note: keeps package com.brave.browser; uninstall stock Brave first (signatures differ).\n"
             bundles_note = dh6k_tag + (f", official {official_tag}" if official_tag else "")
-            note += f"Patch bundles: {bundles_note}\n\n"
-            note += "Applied patches:\n"
+            note += f"Patch bundles: {bundles_note}\n"
+            if fp:
+                note += f"Signing fingerprint: {fp}\n"
+                if match is False:
+                    note += "WARNING: signature differs from keystore\n"
+            note += "\nApplied patches:\n"
             note += "\n".join(f"- {a}" for a in applied) if applied else "- none"
             note += "\n"
             if dropped:
@@ -846,7 +911,7 @@ def main():
             notes.append(note)
 
     for app in config.get("extra_apps", []) or []:
-        build_extra_app(app, alias, notes)
+        build_extra_app(app, alias, ks_fp, notes)
 
     with open('release_notes.md', 'w') as f:
         f.write("# Morphe AutoBuilds Release\n\n" + "".join(notes))
