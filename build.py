@@ -187,6 +187,42 @@ def repo_from_url(url):
         return m.group(1)
     return None
 
+def find_uploaded_asset(own_repo, up_tag, aid, pkg):
+    candidates = []
+    if up_tag:
+        r = requests.get(f"https://api.github.com/repos/{own_repo}/releases/tags/{up_tag}")
+        if r.status_code == 200:
+            candidates.append(r.json())
+    r = requests.get(f"https://api.github.com/repos/{own_repo}/releases/latest")
+    if r.status_code == 200:
+        candidates.append(r.json())
+    r = requests.get(f"https://api.github.com/repos/{own_repo}/releases?per_page=20")
+    if r.status_code == 200:
+        candidates.extend(r.json())
+    seen = set()
+    uniq = []
+    for rel in candidates:
+        if isinstance(rel, dict) and rel.get("id") not in seen:
+            seen.add(rel.get("id"))
+            uniq.append(rel)
+    ids = [x for x in (aid.lower(), (pkg or "").lower()) if x]
+
+    def acceptable(n):
+        n = n.lower()
+        if n.endswith((".apkm", ".xapk")):
+            return True
+        if n.endswith(".zip"):
+            return any(i in n for i in ids) or "merged" in n
+        if n.endswith(".apk"):
+            return "patched" not in n and (any(i in n for i in ids) or "merged" in n)
+        return False
+
+    for rel in uniq:
+        for a in rel.get("assets", []):
+            if acceptable(a["name"]):
+                return a, rel.get("tag_name")
+    return None, None
+
 def find_asset(release):
     for a in release.get("assets", []):
         n = a["name"].lower()
@@ -637,6 +673,37 @@ def build_extra_app(app, alias, ks_fp, release_notes):
                 except Exception as e:
                     print(f"direct bundle failed: {e}")
 
+    if not got:
+        up_tag = (spec.get("upload_tag") or "").strip()
+        own_repo = os.environ.get("GITHUB_REPOSITORY", "")
+        if own_repo:
+            asset, from_tag = find_uploaded_asset(own_repo, up_tag, aid, spec.get("package", ""))
+            if asset:
+                print(f"uploaded apk asset: {asset['name']} from release tag {from_tag}")
+                try:
+                    raw = f"build/upload_{aid}.bin"
+                    download_file(asset["browser_download_url"], raw)
+                    if is_zip(raw):
+                        with zipfile.ZipFile(raw) as z:
+                            names = z.namelist()
+                        entries = [n for n in names if n.lower().endswith(".apk")]
+                        if entries:
+                            keep = select_splits(entries, arch, density, languages)
+                            if keep:
+                                with zipfile.ZipFile(apk_path, "w", zipfile.ZIP_DEFLATED) as zo:
+                                    for n in keep:
+                                        zo.writestr(os.path.basename(n), z.read(n))
+                                mode = f"split subset from uploaded bundle ({arch}, {density})"
+                                got = True
+                                print(f"{aid}: kept {len(keep)} of {len(entries)} splits")
+                        elif "AndroidManifest.xml" in names:
+                            shutil.copyfile(raw, apk_path)
+                            mode = "uploaded single apk (pre-merged)"
+                            got = True
+                            print(f"{aid}: using uploaded single apk as-is")
+                except Exception as e:
+                    print(f"uploaded bundle layer failed: {e}")
+
     if not got and spec.get("repo") and spec.get("tag"):
         try:
             download_github_release_apk(spec, f"build/base_{aid}.apk")
@@ -768,18 +835,26 @@ def main():
         break
 
     official_tag = ""
-    rels2 = requests.get("https://api.github.com/repos/MorpheApp/morphe-patches/releases").json()
-    for r in rels2:
-        if r.get("draft") or not r.get("prerelease"):
-            continue
-        for a in r.get("assets", []):
-            if a["name"].endswith(".mpp"):
-                download_file(a["browser_download_url"], "bundles/official.mpp")
-                official_tag = r.get("tag_name", "unknown")
-                break
-        else:
-            continue
-        break
+    rel_off = requests.get("https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest").json()
+    for a in rel_off.get("assets", []):
+        if a["name"].endswith(".mpp"):
+            download_file(a["browser_download_url"], "bundles/official.mpp")
+            official_tag = rel_off.get("tag_name", "unknown")
+            break
+    if not official_tag:
+        rels2 = requests.get("https://api.github.com/repos/MorpheApp/morphe-patches/releases").json()
+        for r in rels2:
+            if r.get("draft"):
+                continue
+            for a in r.get("assets", []):
+                if a["name"].endswith(".mpp"):
+                    download_file(a["browser_download_url"], "bundles/official.mpp")
+                    official_tag = r.get("tag_name", "unknown")
+                    break
+            else:
+                continue
+            break
+    print(f"Official bundle: {official_tag}")
 
     if os.path.exists("bundles/official.mpp") and not is_zip("bundles/official.mpp"):
         print("WARNING: official bundle file invalid, discarding")
