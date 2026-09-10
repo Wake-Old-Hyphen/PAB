@@ -697,6 +697,7 @@ def build_extra_app(app, alias, ks_fp, release_notes):
                                 got = True
                                 print(f"{aid}: kept {len(keep)} of {len(entries)} splits")
                         elif "AndroidManifest.xml" in names:
+                            apk_path = f"build/base_{aid}.apk"
                             shutil.copyfile(raw, apk_path)
                             mode = "uploaded single apk (pre-merged)"
                             got = True
