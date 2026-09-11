@@ -331,10 +331,22 @@ def enable_entry(entry, vals):
         apply_option(entry, k, v)
         applied[k.lower()] = v
     pkg = applied.get("packagename")
-    if pkg:
-        for k in list((entry.get("options") or {})):
-            kl = k.lower()
-            if "package" in kl or "provider" in kl:
+    if not pkg:
+        return
+    for k in list((entry.get("options") or {})):
+        kl = k.lower()
+        raw = entry["options"][k]
+        cur = raw.get("value") if isinstance(raw, dict) else raw
+        if isinstance(cur, bool):
+            if "update" in kl:
+                set_option_value(entry["options"], k, True)
+        elif cur is None:
+            if "update" in kl:
+                set_option_value(entry["options"], k, True)
+            elif "package" in kl:
+                set_option_value(entry["options"], k, pkg)
+        else:
+            if "package" in kl and "update" not in kl:
                 set_option_value(entry["options"], k, pkg)
 
 def make_variant_options(gen_data, wanted, per_bundle=None):
