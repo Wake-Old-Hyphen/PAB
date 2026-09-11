@@ -43,17 +43,29 @@ extra_apps:
       sha256: "2fbe277a568e0e820cb51b09bcf0c0d788dc4fb070e66025f12d11cd3ec16936"
     variants:
       - id: "TikTok-HXReborn"
+        patches:
+          - "Empty Clipboard Report"
         bundles:
           - url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
             label: "HXReborn"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+            label: "Nai64"
       - id: "TikTok-Icysymmetra"
+        patches:
+          - "Empty Clipboard Report"
         bundles:
           - url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"
             label: "Icysymmetra"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+            label: "Nai64"
       - id: "TikTok-Merged"
         merge_exclusive: true
+        patches:
+          - "Empty Clipboard Report"
         bundles:
           - url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
             label: "HXReborn"
           - url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"
             label: "Icysymmetra"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+            label: "Nai64"
