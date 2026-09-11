@@ -748,9 +748,15 @@ def build_extra_app(app, alias, ks_fp, release_notes):
         per_bundle = []
         lowers_seen = set()
         dup_skipped = []
+        bundles_cfg = variant.get("bundles", [])
         for i in range(len(gen)):
             w = {}
+            bundle_cfg = bundles_cfg[i] if i < len(bundles_cfg) else {}
+            allowed = bundle_cfg.get("patches")
+            allowed_lower = {p.lower() for p in allowed} if allowed is not None else None
             for n in sorted(names_per[i] - needs_per[i]):
+                if allowed_lower is not None and n.lower() not in allowed_lower:
+                    continue
                 if exclusive and i > 0 and n.lower() in lowers_seen:
                     dup_skipped.append(n)
                     continue
