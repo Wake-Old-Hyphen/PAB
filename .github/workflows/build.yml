@@ -12,10 +12,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -36,7 +37,7 @@ jobs:
           mkdir -p signing
           echo "$KEYSTORE_BASE64" | base64 -d > signing/keystore.jks
 
-      - name: Run build
+      - name: Build APKs
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
