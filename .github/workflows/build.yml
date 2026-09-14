@@ -1,4 +1,4 @@
-name: Morphe AutoBuilds
+name: Build and Release
 
 on:
   workflow_dispatch:
@@ -11,42 +11,43 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - name: Decode Persistent Keystore
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           mkdir -p signing
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > signing/keystore.jks
+          echo "$KEYSTORE_BASE64" | base64 -d > signing/keystore.jks
 
-      - name: Run Build Script
+      - name: Run build
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: python build.py
 
-      - name: Create GitHub Release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: autobuild-${{ github.run_number }}
-          name: "AutoBuild ${{ github.run_number }}"
+          tag_name: latest
+          name: "Morphe AutoBuilds"
           body_path: release_notes.md
-          files: build/*-patched.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            build/*-patched.apk
