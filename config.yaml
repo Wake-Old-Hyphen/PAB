@@ -37,6 +37,7 @@ variants:
     app_name: "Brave Mono"
     bundles:
       - "dh6k"
+      - "official"
       - "kveld9"
     fallback_monochrome: true
 
@@ -146,3 +147,80 @@ extra_apps:
             label: "Nai64"
             patches:
               - "Empty Clipboard Report"
+
+  - id: youtube
+    output_base: "YouTube"
+    density: "xxhdpi"
+    languages: ["en"]
+    apk:
+      source: "apkeep"
+      package: "com.google.android.youtube"
+      version: "19.25.39"
+      arch: "arm64-v8a"
+    variants:
+      - id: "YouTube-Morphe"
+        clone_package: "com.yt.zixmophe"
+        bundles:
+          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
+            label: "Morphe"
+
+      - id: "YouTube-Anddea"
+        clone_package: "anddea.youtube.zix"
+        app_name: "YouTube RVX"
+        exclude_patches:
+          - "Spoof signature"
+          - "Change version code"
+        bundles:
+          - url: "https://raw.githubusercontent.com/anddea/revanced-patches/dev/patches-bundle.json"
+            label: "Anddea"
+            patches:
+              - "Custom branding"
+              - "GmsCore support"
+            options:
+              "Custom branding":
+                appName: "YouTube RVX"
+              "GmsCore support":
+                checkGmsCore: true
+                packageName: "anddea.youtube.zix"
+                patchAllManifests: true
+
+  - id: gemini
+    output_base: "Gemini"
+    density: "xxhdpi"
+    languages: ["en"]
+    apk:
+      source: "apkeep"
+      package: "com.google.android.apps.bard"
+      version: "1.0.958859967"
+      version_code: "332"
+      arch: "arm64-v8a"
+      sha256: "d080d9d12b78d313bc9bb72f8ee46d131e0d6e30db15901a1a3994a79b969ef6"
+    variants:
+      - id: "Gemini-microG"
+        clone_package: "com.google.android.apps.bard.morphe"
+        bundles:
+          - url: "https://raw.githubusercontent.com/ryuya0124/gemini-microg-patches/main/patches-bundle.json"
+            label: "GeminiMicroG"
+          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
+            label: "Morphe"
+
+  - id: google
+    output_base: "Google"
+    density: "xxhdpi"
+    languages: ["en"]
+    apk:
+      source: "apkeep"
+      package: "com.google.android.googlequicksearchbox"
+      version: "17.54.18"
+      version_code: "301800642"
+      arch: "arm64-v8a"
+      sha256: "ec2483a9dea3786e23f68012059bc00d5a4593a7f7189c758e57eaa29dfb2325"
+    variants:
+      - id: "Google-microG"
+        clone_package: "com.google.android.googlequicksearchbox.morphe"
+        app_name: "Google (Morphe)"
+        bundles:
+          - url: "https://raw.githubusercontent.com/ryuya0124/gemini-microg-patches/main/patches-bundle.json"
+            label: "GeminiMicroG"
+          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
+            label: "Morphe"
