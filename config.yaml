@@ -61,6 +61,15 @@ extra_apps:
             patches:
               - "Empty Clipboard Report"
 
+      - id: "TikTok-Hushfeed"
+        bundles:
+          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
+            label: "Hushfeed"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+            label: "Nai64"
+            patches:
+              - "Empty Clipboard Report"
+
       - id: "TikTok-Merged"
         merge_exclusive: true
         bundles:
@@ -68,6 +77,20 @@ extra_apps:
             label: "HXReborn"
           - url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"
             label: "Icysymmetra"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+            label: "Nai64"
+            patches:
+              - "Empty Clipboard Report"
+
+      - id: "TikTok-MegaMerged"
+        merge_exclusive: true
+        bundles:
+          - url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
+            label: "HXReborn"
+          - url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"
+            label: "Icysymmetra"
+          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
+            label: "Hushfeed"
           - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
             label: "Nai64"
             patches:
