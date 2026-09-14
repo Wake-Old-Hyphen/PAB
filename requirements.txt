@@ -1,2 +1,5 @@
 requests
 PyYAML
+pyyaml
+beautifulsoup4
+curl_cffi
