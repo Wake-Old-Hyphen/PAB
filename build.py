@@ -223,6 +223,17 @@ def find_uploaded_asset(own_repo, up_tag, aid, pkg):
                 return a, rel.get("tag_name")
     return None, None
 
+def download_monochrome_from_kveld9(dest):
+    try:
+        rel = requests.get("https://api.github.com/repos/kveld9/kveld-morphe-patches/releases/latest").json()
+        for a in rel.get("assets", []):
+            if "mono" in a["name"].lower() and a["name"].lower().endswith(".apk"):
+                download_file(a["browser_download_url"], dest)
+                return rel.get("tag_name", "kveld9-mono")
+    except Exception as e:
+        print(f"kveld9 monochrome download failed: {e}")
+    return None
+
 def find_asset(release):
     for a in release.get("assets", []):
         n = a["name"].lower()
@@ -563,14 +574,14 @@ def get_apk(tag, url, cache):
         cache[tag] = path
     return cache[tag]
 
-def find_version(cands, wanted, auto_all, gen_data, alias, cache, label, start_tag=None):
+def find_version(cands, wanted, auto_all, gen_data, alias, cache, label, start_tag=None, bundles=None):
     ordered = cands
     if start_tag:
         ordered = [c for c in cands if c[0] == start_tag] + [c for c in cands if c[0] != start_tag]
     for tag, url in ordered:
         apk = get_apk(tag, url, cache)
         ok, applied, dropped = heal_patch(apk, f"build/out_{label}_{tag.replace('.', '_')}.apk",
-                                          wanted, auto_all, gen_data, alias, f"{label}_{tag}")
+                                          wanted, auto_all, gen_data, alias, f"{label}_{tag}", bundles=bundles)
         if ok:
             print(f"{label}: working version -> {tag}")
             return tag, applied, dropped, False
@@ -578,7 +589,7 @@ def find_version(cands, wanted, auto_all, gen_data, alias, cache, label, start_t
     tag, url = ordered[0]
     apk = get_apk(tag, url, cache)
     ok, applied, dropped = heal_patch(apk, f"build/out_{label}_{tag.replace('.', '_')}.apk",
-                                      wanted, auto_all, gen_data, alias, f"{label}_besteffort")
+                                      wanted, auto_all, gen_data, alias, f"{label}_besteffort", bundles=bundles)
     print(f"{label}: no fully working version, best effort on {tag}")
     return tag, applied, dropped, True
 
@@ -875,6 +886,16 @@ def main():
             break
     print(f"Official bundle: {official_tag}")
 
+    extra_bundles = {}
+    for eb in config.get("extra_bundles", []) or []:
+        mpp = f"bundles/{eb['id']}.mpp"
+        try:
+            ver = download_bundle_from_json(eb['url'], mpp)
+            extra_bundles[eb['id']] = mpp
+            print(f"Extra bundle {eb['id']} downloaded: {ver}")
+        except Exception as e:
+            print(f"Extra bundle {eb['id']} failed: {e}")
+
     if os.path.exists("bundles/official.mpp") and not is_zip("bundles/official.mpp"):
         print("WARNING: official bundle file invalid, discarding")
         os.remove("bundles/official.mpp")
@@ -906,17 +927,17 @@ def main():
         "Disable analytics": {}
     }
 
-    def resolve(target):
-        for n in bundle_names:
+    def resolve(target, names_set):
+        for n in names_set:
             if n.lower() == target:
                 return n
-        for n in bundle_names:
+        for n in names_set:
             if target in n.lower():
                 return n
         return None
 
-    name_patch = resolve("change app name")
-    clone_patch = resolve("clone app")
+    name_patch = resolve("change app name", bundle_names)
+    clone_patch = resolve("clone app", bundle_names)
     print(f"Resolved name patch: {name_patch}, clone patch: {clone_patch}")
     configurable = set(base_wanted) | {p for p in (name_patch, clone_patch) if p}
 
@@ -960,20 +981,63 @@ def main():
             wanted = copy.deepcopy(base_wanted)
             skipped = []
 
+            # Variant-specific bundles support
+            if variant.get("bundles"):
+                mpps = []
+                for b in variant["bundles"]:
+                    if b in extra_bundles:
+                        mpps.append(extra_bundles[b])
+                    elif os.path.exists(f"bundles/{b}.mpp"):
+                        mpps.append(f"bundles/{b}.mpp")
+                    else:
+                        mpps.append(b)
+                gen = generate_options_file(mpps, out_path=f"build/gen_{variant['id']}.json")
+                info = parse_patches_info(mpps)
+                bundle_names_v = set()
+                for bundle in gen or []:
+                    bundle_names_v |= set((bundle.get("patches") or {}).keys())
+                needs_value_v = needs_value_names(gen)
+                name_patch_v = resolve("change app name", bundle_names_v)
+                clone_patch_v = resolve("clone app", bundle_names_v)
+                configurable_v = set(base_wanted) | {p for p in (name_patch_v, clone_patch_v) if p}
+                auto_all_v = compute_auto(info, CHANNEL_PKG[channel], exclude, configurable_v, needs_value_v) if auto_on else []
+                surviving_auto_v = [n for n in auto_all_v if n not in probe_dropped]
+            else:
+                mpps = BUNDLES
+                gen = gen_data
+                name_patch_v = name_patch
+                clone_patch_v = clone_patch
+                auto_all_v = auto_all
+                surviving_auto_v = surviving_auto
+
             if variant.get('app_name'):
-                if name_patch:
-                    wanted[name_patch] = {"appName": variant['app_name']}
+                if name_patch_v:
+                    wanted[name_patch_v] = {"appName": variant['app_name']}
                 else:
                     skipped.append("Change app name")
             if variant.get('clone_package'):
-                if clone_patch:
-                    wanted[clone_patch] = {"packageName": variant['clone_package']}
+                if clone_patch_v:
+                    wanted[clone_patch_v] = {"packageName": variant['clone_package']}
                 else:
                     skipped.append("Clone app")
 
             tag, applied, dropped, best_effort = find_version(
-                cands, wanted, surviving_auto, gen_data, alias, apk_cache,
-                variant['id'], start_tag=probe_tag)
+                cands, wanted, surviving_auto_v, gen, alias, apk_cache,
+                variant['id'], start_tag=probe_tag, bundles=mpps)
+
+            # Fallback to Monochrome APK if universal failed
+            if variant.get("fallback_monochrome") and best_effort:
+                print(f"{variant['id']}: universal failed, falling back to kveld9 monochrome APK")
+                mono_apk = f"build/base_mono_{variant['id']}.apk"
+                mono_tag = download_monochrome_from_kveld9(mono_apk)
+                if mono_tag:
+                    ok, applied_mono, dropped_mono = heal_patch(mono_apk, f"build/out_{variant['id']}_{mono_tag}.apk",
+                                                              wanted, surviving_auto_v, gen, alias, f"{variant['id']}_{mono_tag}", bundles=mpps)
+                    if ok:
+                        best_effort = False
+                        tag = mono_tag
+                        applied = applied_mono
+                        dropped = dropped_mono
 
             final_name = f"build/{variant['output_name']}-{tag}-{dh6k_tag}-patched.apk"
             src = f"build/out_{variant['id']}_{tag.replace('.', '_')}.apk"
