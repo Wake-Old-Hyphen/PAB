@@ -338,6 +338,7 @@ def repo_from_url(url):
         r"raw\.githubusercontent\.com/([^/]+/[^/]+)/",
         r"github\.com/([^/]+/[^/]+)/",
         r"bundle/([^/]+/[^/]+)/",
+        r"gitlab\.com/([^/]+/[^/]+)/",
     ]:
         m = re.search(pat, url)
         if m:
@@ -783,9 +784,9 @@ def acquire_base(app, aid, appver, arch, density, languages):
         raw = f"build/scraper_{aid}.bin"
 
         for label, fn in [
+            ("apkmirror", lambda: scrape_apkmirror(spec, appver, arch, density)),
             ("apkpure.net", lambda: scrape_apkpure_net(spec, appver)),
             ("uptodown", lambda: scrape_uptodown(spec, appver, arch)),
-            ("apkmirror", lambda: scrape_apkmirror(spec, appver, arch, density)),
         ]:
             try:
                 dl = fn()
@@ -1259,8 +1260,6 @@ def build_extra_app(app, alias, ks_fp, notes):
             for name in sorted((g.get("patches") or {}).keys()):
                 nl = name.lower()
                 if allow_l is not None and nl not in allow_l:
-                    continue
-                if name in needs[i] and not is_branding_patch(name):
                     continue
                 if v.get("merge_exclusive") and nl in seen_lower:
                     dup_skipped.append(name)
