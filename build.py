@@ -239,15 +239,13 @@ def apkeep_download(apkeep, pkg, version, arch, outdir):
     return None
 
 
-def select_splits(entries, arch, densities, languages, include_df=True):
+def select_splits(entries, arch, densities, languages):
     arch_q = arch.replace("-", "_")
     dens = [d.lower() for d in densities]
     langs = [x.lower() for x in languages]
     keep = []
     for n in entries:
         b = os.path.basename(n).lower()
-        if not include_df and b.startswith("split_df_"):
-            continue
         if ".config." not in b:
             keep.append(n)
             continue
@@ -277,19 +275,18 @@ def raw_kind(raw):
     return None
 
 
-def save_base(raw, out_apkm, out_single, arch, densities, languages, include_df):
+def save_base(raw, out_apkm, out_single, arch, densities, languages):
     kind = raw_kind(raw)
     if kind == "bundle":
         with zipfile.ZipFile(raw) as z:
             entries = [n for n in z.namelist() if n.lower().endswith(".apk")]
-            keep = select_splits(entries, arch, densities, languages, include_df=include_df)
+            keep = select_splits(entries, arch, densities, languages)
             if not keep:
                 return None, None
             with zipfile.ZipFile(out_apkm, "w", zipfile.ZIP_DEFLATED) as zo:
                 for n in keep:
                     zo.writestr(os.path.basename(n), z.read(n))
-        tag = "no-df" if not include_df else "with-df"
-        return out_apkm, f"split subset {tag} ({arch}, {'/'.join(densities)})"
+        return out_apkm, f"split subset with-df ({arch}, {'/'.join(densities)})"
     if kind == "single":
         shutil.copyfile(raw, out_single)
         return out_single, f"single apk ({arch})"
@@ -538,11 +535,15 @@ def apkmirror_candidate_pages(spec, version):
 
 def scrape_apkmirror(spec, version, arch, density):
     base = "https://www.apkmirror.com"
-    btype = (spec.get("apkmirror_type") or "APK").upper()
-    types = [btype]
-    for t in ["BUNDLE", "APK", "ANY"]:
-        if t not in types:
-            types.append(t)
+    btype = (spec.get("apkmirror_type") or "ANY").upper()
+    
+    if btype == "ANY":
+        types = ["BUNDLE", "APK"]
+    else:
+        types = [btype]
+        for t in ["BUNDLE", "APK", "ANY"]:
+            if t not in types:
+                types.append(t)
 
     pages = apkmirror_candidate_pages(spec, version)
     print(f"APKMirror candidate pages for {version}: {len(pages)}")
@@ -673,7 +674,8 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
             return None
         return k
 
-    if not bundle_only and source in ("upload", "apkeep", "scraper"):
+    # 1. If source is explicitly "upload", try upload FIRST
+    if not bundle_only and source == "upload":
         up_tag = (spec.get("upload_tag") or "").strip()
         own_repo = os.environ.get("GITHUB_REPOSITORY", "")
         if up_tag and own_repo and version == default_version:
@@ -689,6 +691,7 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
                 except Exception as e:
                     print(f"{aid}: uploaded asset failed: {e}")
 
+    # 2. Try scrapers (APKMirror, APKPure, Uptodown)
     if result[0] is None and source in ("apkeep", "scraper", "upload"):
         raw = f"build/raw_{aid}_{safe_name(version)}_scraper.bin"
         for label, fn in [
@@ -714,6 +717,24 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
             except Exception as e:
                 print(f"{aid}: {label} failed: {e}")
 
+    # 3. Fallback to upload if source was "scraper" and scrapers failed
+    if result[0] is None and source == "scraper":
+        up_tag = (spec.get("upload_tag") or "").strip()
+        own_repo = os.environ.get("GITHUB_REPOSITORY", "")
+        if up_tag and own_repo and version == default_version:
+            asset, tag = find_uploaded_asset(own_repo, up_tag, aid, spec.get("package", ""))
+            if asset:
+                print(f"{aid}: scraper failed, falling back to uploaded asset {asset['name']} from release {tag}")
+                raw = f"build/raw_{aid}_{safe_name(version)}_upload_fallback.bin"
+                try:
+                    download_file(asset["browser_download_url"], raw)
+                    k = accept(raw)
+                    if k:
+                        result = (raw, k)
+                except Exception as e:
+                    print(f"{aid}: uploaded fallback asset failed: {e}")
+
+    # 4. Try apkeep
     if result[0] is None and source == "apkeep":
         try:
             apkeep = ensure_apkeep()
@@ -725,6 +746,7 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
         except Exception as e:
             print(f"{aid}: apkeep failed: {e}")
 
+    # 5. Direct APKPure fallback
     if result[0] is None and source in ("apkeep", "scraper") and version == default_version:
         vc = str(spec.get("version_code") or "").strip()
         pkg = spec.get("package", "")
@@ -741,6 +763,7 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
                 except Exception as e:
                     print(f"{aid}: direct APKPure failed: {e}")
 
+    # 6. GitHub release fallback
     if result[0] is None and version == default_version and spec.get("repo") and spec.get("tag") and not bundle_only:
         try:
             raw = f"build/base_{aid}_gh.apk"
@@ -761,8 +784,7 @@ def prepare_bases(app, aid, version, source, arch, densities, languages):
         return BASE_CACHE[key]
 
     sv = safe_name(version)
-    out_full_apkm = f"build/base_{aid}_{sv}_full.apkm"
-    out_slim_apkm = f"build/base_{aid}_{sv}_slim.apkm"
+    out_apkm = f"build/base_{aid}_{sv}.apkm"
     out_single = f"build/base_{aid}_{sv}.apk"
 
     raw, kind = fetch_raw(app, aid, version, source, bundle_only=False)
@@ -771,17 +793,16 @@ def prepare_bases(app, aid, version, source, arch, densities, languages):
         return None
 
     if kind == "bundle":
-        full = save_base(raw, out_full_apkm, out_single, arch, densities, languages, True)
-        slim = save_base(raw, out_slim_apkm, out_single, arch, densities, languages, False)
-        res = {"full": full, "slim": slim, "single": False}
+        res_tuple = save_base(raw, out_apkm, out_single, arch, densities, languages)
+        res = {"base": res_tuple, "single": False}
     else:
-        full = save_base(raw, out_full_apkm, out_single, arch, densities, languages, True)
         raw2, kind2 = fetch_raw(app, aid, version, source, bundle_only=True)
         if kind2 == "bundle":
-            slim = save_base(raw2, out_slim_apkm, out_single, arch, densities, languages, False)
-            res = {"full": full, "slim": slim, "single": False}
+            res_tuple = save_base(raw2, out_apkm, out_single, arch, densities, languages)
+            res = {"base": res_tuple, "single": False}
         else:
-            res = {"full": full, "slim": full, "single": True}
+            res_tuple = save_base(raw, out_apkm, out_single, arch, densities, languages)
+            res = {"base": res_tuple, "single": True}
 
     BASE_CACHE[key] = res
     return res
@@ -1252,44 +1273,35 @@ def build_extra_app(app, alias, ks_fp, notes):
         parts = [f"{b['label']}_v{str(b.get('_ver', '?')).lstrip('v')}-{b.get('_status', '?')}" for b in v["bundles"]]
         joined = "_X_".join(parts)
 
-        modes = ["slim"]
-        if not bases["single"]:
-            modes.append("full")
+        bp, bmode = bases["base"]
+        out = f"build/out_{safe_name(vid)}.apk"
+        ok, applied, dropped, missing = heal_patch(bp, out, gen, per_bundle, vid, alias, mpps)
 
-        for mode in modes:
-            bp, bmode = bases[mode]
-            out = f"build/out_{safe_name(vid)}_{mode}.apk"
-            ok, applied, dropped, missing = heal_patch(bp, out, gen, per_bundle, f"{vid}_{mode}", alias, mpps)
+        final = f"build/{app.get('output_base', aid)}-{ver}-{joined}-patched.apk"
+        head = f"## {vid}"
 
-            if mode == "slim":
-                final = f"build/{app.get('output_base', aid)}-{ver}-{joined}-patched.apk"
-                head = f"## {vid}"
-            else:
-                final = f"build/{app.get('output_base', aid)}-{ver}-{joined}-fulldf-patched.apk"
-                head = f"## {vid} (full dynamic features)"
-
-            if ok and os.path.exists(out):
-                shutil.copyfile(out, final)
-                fp = verify_signature(final, ks_fp)
-                note = f"{head}\n"
-                note += f"App version: {ver}\n"
-                note += f"Bundles: {', '.join(parts)}\n"
-                note += f"Build mode: {bmode}\n"
-                if bases["single"]:
-                    note += "Note: base is a single APK; no dynamic-feature splits to remove.\n"
-                if fp:
-                    note += f"Signing fingerprint: {fp}\n"
-                note += "\nApplied patches:\n"
-                note += "\n".join(f"- {x}" for x in applied) if applied else "- none"
-                note += "\n"
-                if dropped:
-                    note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
-                if dup_skipped:
-                    note += "\nDuplicate patches skipped:\n" + "\n".join(f"- {x}" for x in dup_skipped) + "\n"
-                note += "\nStatus: Success\n\n"
-                notes.append(note)
-            else:
-                notes.append(f"{head}\nStatus: Failed\n\n")
+        if ok and os.path.exists(out):
+            shutil.copyfile(out, final)
+            fp = verify_signature(final, ks_fp)
+            note = f"{head}\n"
+            note += f"App version: {ver}\n"
+            note += f"Bundles: {', '.join(parts)}\n"
+            note += f"Build mode: {bmode}\n"
+            if bases["single"]:
+                note += "Note: base is a single APK; no dynamic-feature splits to merge.\n"
+            if fp:
+                note += f"Signing fingerprint: {fp}\n"
+            note += "\nApplied patches:\n"
+            note += "\n".join(f"- {x}" for x in applied) if applied else "- none"
+            note += "\n"
+            if dropped:
+                note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
+            if dup_skipped:
+                note += "\nDuplicate patches skipped:\n" + "\n".join(f"- {x}" for x in dup_skipped) + "\n"
+            note += "\nStatus: Success\n\n"
+            notes.append(note)
+        else:
+            notes.append(f"{head}\nStatus: Failed\n\n")
 
 
 def download_monochrome_from_kveld9(dest):
@@ -1443,15 +1455,15 @@ def main():
                 per_bundle.append(d)
 
             if variant.get("app_name") and n_patch:
-                for d in per_bundle:
-                    if n_patch in d or n_patch in names:
-                        d[n_patch] = {"appName": variant["app_name"]}
+                for i, g in enumerate(gen):
+                    if n_patch in (g.get("patches") or {}):
+                        per_bundle[i][n_patch] = {"appName": variant["app_name"]}
                         break
 
             if variant.get("clone_package") and c_patch:
-                for d in per_bundle:
-                    if c_patch in d or c_patch in names:
-                        d[c_patch] = {"packageName": variant["clone_package"]}
+                for i, g in enumerate(gen):
+                    if c_patch in (g.get("patches") or {}):
+                        per_bundle[i][c_patch] = {"packageName": variant["clone_package"]}
                         break
 
             tag, out, applied, dropped, best_effort = find_working_brave_version(
