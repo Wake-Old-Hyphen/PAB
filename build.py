@@ -674,7 +674,6 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
             return None
         return k
 
-    # 1. If source is explicitly "upload", try upload FIRST
     if not bundle_only and source == "upload":
         up_tag = (spec.get("upload_tag") or "").strip()
         own_repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -691,7 +690,6 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
                 except Exception as e:
                     print(f"{aid}: uploaded asset failed: {e}")
 
-    # 2. Try scrapers (APKMirror, APKPure, Uptodown)
     if result[0] is None and source in ("apkeep", "scraper", "upload"):
         raw = f"build/raw_{aid}_{safe_name(version)}_scraper.bin"
         for label, fn in [
@@ -717,7 +715,6 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
             except Exception as e:
                 print(f"{aid}: {label} failed: {e}")
 
-    # 3. Fallback to upload if source was "scraper" and scrapers failed
     if result[0] is None and source == "scraper":
         up_tag = (spec.get("upload_tag") or "").strip()
         own_repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -734,7 +731,6 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
                 except Exception as e:
                     print(f"{aid}: uploaded fallback asset failed: {e}")
 
-    # 4. Try apkeep
     if result[0] is None and source == "apkeep":
         try:
             apkeep = ensure_apkeep()
@@ -746,7 +742,6 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
         except Exception as e:
             print(f"{aid}: apkeep failed: {e}")
 
-    # 5. Direct APKPure fallback
     if result[0] is None and source in ("apkeep", "scraper") and version == default_version:
         vc = str(spec.get("version_code") or "").strip()
         pkg = spec.get("package", "")
@@ -763,7 +758,6 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
                 except Exception as e:
                     print(f"{aid}: direct APKPure failed: {e}")
 
-    # 6. GitHub release fallback
     if result[0] is None and version == default_version and spec.get("repo") and spec.get("tag") and not bundle_only:
         try:
             raw = f"build/base_{aid}_gh.apk"
@@ -1274,6 +1268,10 @@ def build_extra_app(app, alias, ks_fp, notes):
         joined = "_X_".join(parts)
 
         bp, bmode = bases["base"]
+        if not bp:
+            notes.append(f"## {vid}\nStatus: Failed (base extraction)\n\n")
+            continue
+
         out = f"build/out_{safe_name(vid)}.apk"
         ok, applied, dropped, missing = heal_patch(bp, out, gen, per_bundle, vid, alias, mpps)
 
