@@ -152,7 +152,7 @@ extra_apps:
     density: "xxhdpi"
     languages: ["en"]
     apk:
-      source: "apkeep"
+      source: "scraper"
       package: "com.google.android.youtube"
       version: "21.07.247"
       arch: "arm64-v8a"
@@ -185,6 +185,101 @@ extra_apps:
             checkGmsCore: true
             packageNameYouTube: "anddea.youtube.zix"
             patchAllManifests: true
+
+  - id: ytmusic
+    output_base: "YouTubeMusic"
+    density: "xxhdpi"
+    languages: ["en"]
+    apk:
+      source: "scraper"
+      package: "com.google.android.apps.youtube.music"
+      version: "9.15.51"
+      arch: "arm64-v8a"
+      apkpure_name: "youtube-music"
+      uptodown_slug: "youtube-music"
+      apkmirror_org: "google-inc"
+      apkmirror_names:
+        - "youtube-music"
+      apkmirror_type: "APK"
+    variants:
+      - id: "YouTubeMusic-Morphe"
+        clone_package: "com.yt.muzik.zixmophe"
+        bundles:
+          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
+            label: "Morphe"
+
+  - id: windscribe
+    output_base: "Windscribe"
+    density: "xxhdpi"
+    languages: ["en"]
+    apk:
+      source: "scraper"
+      package: "com.windscribe.vpn"
+      arch: "arm64-v8a"
+      apkpure_name: "windscribe"
+      uptodown_slug: "windscribe"
+      apkmirror_org: "windscribe"
+      apkmirror_names:
+        - "windscribe"
+      apkmirror_type: "APK"
+    variants:
+      - id: "Windscribe-MicroG"
+        bundles:
+          - url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/dev/patches-bundle.json"
+            label: "Rushiranpise"
+            patches:
+              - "GmsCore support"
+              - "Unlock Premium"
+
+  - id: protonmail
+    output_base: "ProtonMail"
+    density: "xxhdpi"
+    languages: ["en"]
+    apk:
+      source: "scraper"
+      package: "ch.protonmail.android"
+      arch: "arm64-v8a"
+      apkpure_name: "protonmail"
+      uptodown_slug: "protonmail"
+      apkmirror_org: "proton"
+      apkmirror_names:
+        - "protonmail"
+      apkmirror_type: "APK"
+    variants:
+      - id: "ProtonMail-Patched"
+        bundles:
+          - url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/dev/patches-bundle.json"
+            label: "Rushiranpise"
+
+  - id: protonvpn
+    output_base: "ProtonVPN"
+    density: "xxhdpi"
+    languages: ["en"]
+    apk:
+      source: "scraper"
+      package: "ch.protonvpn.android"
+      arch: "arm64-v8a"
+      apkpure_name: "protonvpn"
+      uptodown_slug: "protonvpn"
+      apkmirror_org: "proton"
+      apkmirror_names:
+        - "protonvpn"
+      apkmirror_type: "APK"
+    variants:
+      - id: "ProtonVPN-Patched"
+        bundles:
+          - url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/dev/patches-bundle.json"
+            label: "Rushiranpise"
+            patches:
+              - "Unlock VPN Plus"
+          - url: "https://raw.githubusercontent.com/kondratjev/morphe-patches/dev/patches-bundle.json"
+            label: "Kondratjev"
+            patches:
+              - "Disable analytics"
+          - url: "https://gitlab.com/Paresh-Maheshwari/paresh-patches/-/raw/main/patches-bundle.json"
+            label: "Paresh"
+            patches:
+              - "Disable telemetry"
 
   - id: gemini
     output_base: "Gemini"
