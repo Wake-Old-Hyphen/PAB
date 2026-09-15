@@ -44,11 +44,18 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: python build.py
 
+      - name: Generate release tag
+        id: tag
+        run: |
+          TAG="build-$(date +%Y%m%d-%H%M%S)"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Generated tag: $TAG"
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: "Morphe AutoBuilds"
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Morphe AutoBuilds ${{ steps.tag.outputs.tag }}"
           body_path: release_notes.md
           files: |
             build/*-patched.apk
