@@ -711,13 +711,35 @@ def find_uploaded_asset(own_repo, up_tag, aid, pkg):
     return None, None
 
 
+def download_github_release_apk(spec, dest):
+    repo = spec["repo"]
+    tag = spec["tag"]
+    match = (spec.get("match") or "").lower()
+    rel = requests.get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}", timeout=60).json()
+    assets = rel.get("assets", [])
+    print(f"fallback release assets: {[a.get('name') for a in assets]}")
+
+    chosen = None
+    if match:
+        for a in assets:
+            if match in a.get("name", "").lower():
+                chosen = a
+                break
+    if chosen is None and assets:
+        chosen = assets[0]
+    if chosen is None:
+        raise Exception("No asset found")
+
+    download_file(chosen["browser_download_url"], dest)
+    return chosen["name"]
+
+
 def acquire_base(app, aid, appver, arch, density, languages):
     spec = app["apk"]
     source = spec.get("source", "apkeep")
     out_apkm = f"build/base_{aid}.apkm"
     out_single = f"build/base_{aid}.apk"
 
-    # Uploaded APK first when requested. This is important for TikTok.
     up_tag = (spec.get("upload_tag") or "").strip()
     own_repo = os.environ.get("GITHUB_REPOSITORY", "")
     if source in ("upload", "apkeep", "scraper") and up_tag and own_repo:
@@ -730,7 +752,6 @@ def acquire_base(app, aid, appver, arch, density, languages):
             if path:
                 return path, "uploaded " + mode, True
 
-    # apkeep layer.
     if source == "apkeep":
         try:
             apkeep = ensure_apkeep()
@@ -742,7 +763,6 @@ def acquire_base(app, aid, appver, arch, density, languages):
         except Exception as e:
             print(f"{aid}: apkeep failed: {e}")
 
-    # Direct APKPure versionCode layer.
     if source in ("apkeep", "scraper"):
         vc = str(spec.get("version_code") or "").strip()
         pkg = spec.get("package", "")
@@ -758,7 +778,6 @@ def acquire_base(app, aid, appver, arch, density, languages):
                 except Exception as e:
                     print(f"{aid}: direct APKPure failed: {e}")
 
-    # Web scrapers.
     if source in ("apkeep", "scraper"):
         print(f"{aid}: trying scrapers for {spec.get('package')} {appver}")
         raw = f"build/scraper_{aid}.bin"
@@ -782,7 +801,6 @@ def acquire_base(app, aid, appver, arch, density, languages):
             except Exception as e:
                 print(f"{aid}: {label} failed: {e}")
 
-    # External fallback repo.
     if spec.get("repo") and spec.get("tag"):
         try:
             name = download_github_release_apk(spec, out_single)
@@ -791,29 +809,6 @@ def acquire_base(app, aid, appver, arch, density, languages):
             print(f"{aid}: github fallback failed: {e}")
 
     return None, "", False
-
-
-def download_github_release_apk(spec, dest):
-    repo = spec["repo"]
-    tag = spec["tag"]
-    match = (spec.get("match") or "").lower()
-    rel = requests.get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}", timeout=60).json()
-    assets = rel.get("assets", [])
-    print(f"fallback release assets: {[a.get('name') for a in assets]}")
-
-    chosen = None
-    if match:
-        for a in assets:
-            if match in a.get("name", "").lower():
-                chosen = a
-                break
-    if chosen is None and assets:
-        chosen = assets[0]
-    if chosen is None:
-        raise Exception("No asset found")
-
-    download_file(chosen["browser_download_url"], dest)
-    return chosen["name"]
 
 
 def find_asset(release):
@@ -1189,6 +1184,20 @@ def get_latest_cli_jar():
     raise Exception("Could not find Morphe CLI all.jar")
 
 
+BRANDING_KEYWORDS = (
+    "custom branding",
+    "change app name",
+    "change app name and icon",
+    "change app icon",
+    "custom app icon",
+    "custom icon",
+)
+
+def is_branding_patch(name):
+    nl = (name or "").lower()
+    return any(k in nl for k in BRANDING_KEYWORDS)
+
+
 def build_extra_app(app, alias, ks_fp, notes):
     aid = app["id"]
     print(f"\n=== Extra app: {aid} ===")
@@ -1251,7 +1260,7 @@ def build_extra_app(app, alias, ks_fp, notes):
                 nl = name.lower()
                 if allow_l is not None and nl not in allow_l:
                     continue
-                if name in needs[i]:
+                if name in needs[i] and not is_branding_patch(name):
                     continue
                 if v.get("merge_exclusive") and nl in seen_lower:
                     dup_skipped.append(name)
@@ -1358,7 +1367,6 @@ def main():
 
     get_latest_cli_jar()
 
-    # Download Brave patch bundles.
     dh6k_tag = "unknown"
     rels = requests.get("https://api.github.com/repos/dh6k/morphe-patches/releases", timeout=60).json()
     for r in rels:
