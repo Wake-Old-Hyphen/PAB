@@ -47,7 +47,7 @@ extra_apps:
     density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
-      source: "scraper" # CHANGED: Try APKMirror first, fallback to upload if it fails
+      source: "scraper"
       package: "com.zhiliaoapp.musically"
       version: "46.2.3"
       version_code: "2024602030"
