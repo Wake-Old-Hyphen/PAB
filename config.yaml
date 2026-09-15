@@ -44,7 +44,7 @@ variants:
 extra_apps:
   - id: tiktok
     output_base: "TikTok"
-    density: "xxhdpi"
+    density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
       source: "upload"
@@ -56,6 +56,12 @@ extra_apps:
       repo: "hxreborn/Morphe-AutoBuilds"
       tag: "stock-apks"
       match: "46.2.3"
+      apkpure_name: "tiktok"
+      uptodown_slug: "tiktok"
+      apkmirror_org: "tiktok-pte-ltd"
+      apkmirror_names:
+        - "tiktok"
+      apkmirror_type: "BUNDLE"
     variants:
       - id: "TikTok-HXReborn"
         bundles:
@@ -84,32 +90,6 @@ extra_apps:
             patches:
               - "Empty Clipboard Report"
 
-      - id: "TikTok-Merged"
-        merge_exclusive: true
-        bundles:
-          - url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
-            label: "HXReborn"
-          - url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"
-            label: "Icysymmetra"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
-
-      - id: "TikTok-MegaMerged"
-        merge_exclusive: true
-        bundles:
-          - url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
-            label: "HXReborn"
-          - url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"
-            label: "Icysymmetra"
-          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
-            label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
-
       - id: "TikTok-Kveld9"
         bundles:
           - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
@@ -131,17 +111,34 @@ extra_apps:
             patches:
               - "Empty Clipboard Report"
 
-      - id: "TikTok-Kveld9XHushfeedXHxrebornXmetra"
-        merge_exclusive: true
+      - id: "TikTok-46.9.3-Kveld9"
+        apk_version: "46.9.3"
+        apk_source: "scraper"
         bundles:
           - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
             label: "Kveld9"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+            label: "Nai64"
+            patches:
+              - "Empty Clipboard Report"
+
+      - id: "TikTok-46.8.3-Hushfeed"
+        apk_version: "46.8.3"
+        apk_source: "scraper"
+        bundles:
           - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
             label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
-            label: "HXReborn"
-          - url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"
-            label: "Icysymmetra"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+            label: "Nai64"
+            patches:
+              - "Empty Clipboard Report"
+
+      - id: "TikTok-46.7.3-Hushfeed"
+        apk_version: "46.7.3"
+        apk_source: "scraper"
+        bundles:
+          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
+            label: "Hushfeed"
           - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
             label: "Nai64"
             patches:
@@ -149,7 +146,7 @@ extra_apps:
 
   - id: youtube
     output_base: "YouTube"
-    density: "xxhdpi"
+    density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
       source: "scraper"
@@ -188,7 +185,7 @@ extra_apps:
 
   - id: ytmusic
     output_base: "YouTubeMusic"
-    density: "xxhdpi"
+    density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
       source: "scraper"
@@ -210,7 +207,7 @@ extra_apps:
 
   - id: windscribe
     output_base: "Windscribe"
-    density: "xxhdpi"
+    density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
       source: "scraper"
@@ -220,6 +217,7 @@ extra_apps:
       uptodown_slug: "windscribe"
       apkmirror_org: "windscribe"
       apkmirror_names:
+        - "windscribe-vpn"
         - "windscribe"
       apkmirror_type: "APK"
     variants:
@@ -233,7 +231,7 @@ extra_apps:
 
   - id: protonmail
     output_base: "ProtonMail"
-    density: "xxhdpi"
+    density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
       source: "scraper"
@@ -243,6 +241,7 @@ extra_apps:
       uptodown_slug: "protonmail"
       apkmirror_org: "proton"
       apkmirror_names:
+        - "protonmail-encrypted-email"
         - "protonmail"
       apkmirror_type: "APK"
     variants:
@@ -253,7 +252,7 @@ extra_apps:
 
   - id: protonvpn
     output_base: "ProtonVPN"
-    density: "xxhdpi"
+    density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
       source: "scraper"
@@ -263,6 +262,7 @@ extra_apps:
       uptodown_slug: "protonvpn"
       apkmirror_org: "proton"
       apkmirror_names:
+        - "protonvpn-fast-secure-vpn"
         - "protonvpn"
       apkmirror_type: "APK"
     variants:
@@ -283,7 +283,7 @@ extra_apps:
 
   - id: gemini
     output_base: "Gemini"
-    density: "xxhdpi"
+    density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
       source: "scraper"
@@ -308,7 +308,7 @@ extra_apps:
 
   - id: google
     output_base: "Google"
-    density: "xxhdpi"
+    density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
       source: "scraper"
