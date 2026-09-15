@@ -47,7 +47,7 @@ extra_apps:
     density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
-      source: "upload"
+      source: "scraper" # CHANGED: Try APKMirror first, fallback to upload if it fails
       package: "com.zhiliaoapp.musically"
       version: "46.2.3"
       version_code: "2024602030"
@@ -61,7 +61,9 @@ extra_apps:
       apkmirror_org: "tiktok-pte-ltd"
       apkmirror_names:
         - "tiktok"
-      apkmirror_type: "BUNDLE"
+        - "tik-tok"
+        - "tik-tok-including-musical-ly"
+      apkmirror_type: "ANY"
     variants:
       - id: "TikTok-HXReborn"
         bundles:
@@ -90,15 +92,6 @@ extra_apps:
             patches:
               - "Empty Clipboard Report"
 
-      - id: "TikTok-Kveld9"
-        bundles:
-          - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
-            label: "Kveld9"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
-
       - id: "TikTok-Kveld9XHushfeed"
         merge_exclusive: true
         bundles:
@@ -111,12 +104,12 @@ extra_apps:
             patches:
               - "Empty Clipboard Report"
 
-      - id: "TikTok-46.9.3-Kveld9"
-        apk_version: "46.9.3"
+      - id: "TikTok-46.7.3-Hushfeed"
+        apk_version: "46.7.3"
         apk_source: "scraper"
         bundles:
-          - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
-            label: "Kveld9"
+          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
+            label: "Hushfeed"
           - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
             label: "Nai64"
             patches:
@@ -133,12 +126,12 @@ extra_apps:
             patches:
               - "Empty Clipboard Report"
 
-      - id: "TikTok-46.7.3-Hushfeed"
-        apk_version: "46.7.3"
+      - id: "TikTok-46.9.3-Kveld9"
+        apk_version: "46.9.3"
         apk_source: "scraper"
         bundles:
-          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
-            label: "Hushfeed"
+          - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
+            label: "Kveld9"
           - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
             label: "Nai64"
             patches:
@@ -158,7 +151,7 @@ extra_apps:
       apkmirror_org: "google-inc"
       apkmirror_names:
         - "youtube"
-      apkmirror_type: "APK"
+      apkmirror_type: "ANY"
     variants:
       - id: "YouTube-Morphe"
         clone_package: "com.yt.zixmophe"
@@ -197,7 +190,7 @@ extra_apps:
       apkmirror_org: "google-inc"
       apkmirror_names:
         - "youtube-music"
-      apkmirror_type: "APK"
+      apkmirror_type: "ANY"
     variants:
       - id: "YouTubeMusic-Morphe"
         clone_package: "com.yt.muzik.zixmophe"
@@ -219,7 +212,7 @@ extra_apps:
       apkmirror_names:
         - "windscribe-vpn"
         - "windscribe"
-      apkmirror_type: "APK"
+      apkmirror_type: "ANY"
     variants:
       - id: "Windscribe-MicroG"
         bundles:
@@ -239,11 +232,11 @@ extra_apps:
       arch: "arm64-v8a"
       apkpure_name: "protonmail"
       uptodown_slug: "protonmail"
-      apkmirror_org: "proton"
+      apkmirror_org: "proton-technologies-ag"
       apkmirror_names:
         - "protonmail-encrypted-email"
         - "protonmail"
-      apkmirror_type: "APK"
+      apkmirror_type: "ANY"
     variants:
       - id: "ProtonMail-Patched"
         bundles:
@@ -260,11 +253,11 @@ extra_apps:
       arch: "arm64-v8a"
       apkpure_name: "protonvpn"
       uptodown_slug: "protonvpn"
-      apkmirror_org: "proton"
+      apkmirror_org: "proton-technologies-ag"
       apkmirror_names:
         - "protonvpn-fast-secure-vpn"
         - "protonvpn"
-      apkmirror_type: "APK"
+      apkmirror_type: "ANY"
     variants:
       - id: "ProtonVPN-Patched"
         bundles:
@@ -296,7 +289,7 @@ extra_apps:
       apkmirror_names:
         - "gemini"
         - "google-gemini"
-      apkmirror_type: "APK"
+      apkmirror_type: "ANY"
     variants:
       - id: "Gemini-microG"
         clone_package: "com.google.android.apps.bard.morphe"
@@ -321,7 +314,7 @@ extra_apps:
       apkmirror_names:
         - "google-search"
         - "google"
-      apkmirror_type: "BUNDLE"
+      apkmirror_type: "ANY"
     variants:
       - id: "Google-microG"
         clone_package: "com.google.android.googlequicksearchbox.morphe"
