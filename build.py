@@ -28,11 +28,7 @@ except Exception:
 
 MAX_ATTEMPTS = 5
 
-PINNED = {
-    "stable": "",
-    "nightly": "",
-    "beta": "",
-}
+PINNED = {"stable": "", "nightly": "", "beta": ""}
 
 CHANNEL_PKG = {
     "stable": "com.brave.browser",
@@ -50,6 +46,9 @@ UA = {
                   "(KHTML, like Gecko) Chrome/131 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+RAW_CACHE = {}
+BASE_CACHE = {}
 
 
 def parse_ver(tag):
@@ -96,7 +95,6 @@ def download_file(url, dest, timeout=1200):
 
 def download_browser(url, dest, timeout=1200):
     print(f"Downloading browser-style {url} ...")
-
     try:
         with requests.get(url, stream=True, timeout=timeout, headers=UA, allow_redirects=True) as r:
             r.raise_for_status()
@@ -121,13 +119,11 @@ def download_browser(url, dest, timeout=1200):
                         return True
             except Exception as e:
                 print(f"curl_cffi download failed with {imp}: {e}")
-
     return False
 
 
 def cf_get(url, timeout=30):
     print(f"GET {url}")
-
     if HAS_CURL_CFFI:
         for imp in ["chrome136", "chrome133", "chrome131", "chrome124", "chrome120", "chrome110"]:
             try:
@@ -141,7 +137,6 @@ def cf_get(url, timeout=30):
                     return text
             except Exception:
                 continue
-
     try:
         r = requests.get(url, timeout=timeout, headers=UA, allow_redirects=True)
         if r.status_code == 200:
@@ -151,7 +146,6 @@ def cf_get(url, timeout=30):
                 return text
     except Exception as e:
         print(f"plain GET failed: {e}")
-
     return None
 
 
@@ -195,8 +189,6 @@ def ensure_apkeep():
                         break
                 if target is None and members:
                     target = members[0]
-                if target is None:
-                    raise Exception("No file inside apkeep tar")
                 f = t.extractfile(target)
                 with open(path, "wb") as out:
                     out.write(f.read())
@@ -206,8 +198,6 @@ def ensure_apkeep():
                 names = [n for n in z.namelist() if os.path.basename(n) == "apkeep"]
                 if not names:
                     names = [n for n in z.namelist() if not n.endswith("/")]
-                if not names:
-                    raise Exception("No file inside apkeep zip")
                 with open(path, "wb") as out:
                     out.write(z.read(names[0]))
                 extracted = True
@@ -218,20 +208,17 @@ def ensure_apkeep():
         shutil.copyfile(raw, path)
 
     os.chmod(path, 0o755)
-    print(f"apkeep ready at {path}, exists={os.path.exists(path)}, mode={oct(os.stat(path).st_mode)}")
     return path
 
 
 def apkeep_download(apkeep, pkg, version, arch, outdir):
     os.makedirs(outdir, exist_ok=True)
     spec = f"{pkg}@{version}" if version and version != "latest" else pkg
-
     attempts = [
         [apkeep, "-a", spec, "-d", "apk-pure", "-o", f"arch={arch}", outdir],
         [apkeep, "-a", spec, "-o", f"arch={arch}", outdir],
         [apkeep, "-a", spec, outdir],
     ]
-
     for cmd in attempts:
         try:
             print("Running:", " ".join(cmd))
@@ -249,62 +236,63 @@ def apkeep_download(apkeep, pkg, version, arch, outdir):
                 return files[0]
         except Exception as e:
             print(f"apkeep attempt failed: {e}")
-
     return None
 
 
-def select_splits(entries, arch, density, languages):
+def select_splits(entries, arch, densities, languages, include_df=True):
     arch_q = arch.replace("-", "_")
-    languages = [x.lower() for x in languages]
+    dens = [d.lower() for d in densities]
+    langs = [x.lower() for x in languages]
     keep = []
-
     for n in entries:
         b = os.path.basename(n).lower()
+        if not include_df and b.startswith("split_df_"):
+            continue
         if ".config." not in b:
             keep.append(n)
             continue
-
         qual = b.split(".config.")[-1].replace(".apk", "").lower()
-
         if qual in ABI_QUALS:
             if qual == arch_q:
                 keep.append(n)
-        elif qual in DPI_QUALS:
-            if qual == density.lower():
-                keep.append(n)
+        elif qual in dens:
+            keep.append(n)
         elif qual.isalpha() and len(qual) <= 3:
-            if qual in languages:
+            if qual in langs:
                 keep.append(n)
         else:
             keep.append(n)
-
     return keep
 
 
-def save_base_from_zip(raw, out_apkm, out_single, arch, density, languages):
+def raw_kind(raw):
     if not raw or not os.path.exists(raw) or not is_zip(raw):
-        return None, None
-
+        return None
     with zipfile.ZipFile(raw) as z:
         names = z.namelist()
-        apk_entries = [n for n in names if n.lower().endswith(".apk")]
+    if any(n.lower().endswith(".apk") for n in names):
+        return "bundle"
+    if any(n.endswith("AndroidManifest.xml") for n in names):
+        return "single"
+    return None
 
-        if apk_entries:
-            keep = select_splits(apk_entries, arch, density, languages)
-            if not keep:
-                print("No matching split entries found")
-                return None, None
 
-            with zipfile.ZipFile(out_apkm, "w", zipfile.ZIP_DEFLATED) as zo:
-                for n in keep:
-                    zo.writestr(os.path.basename(n), z.read(n))
-
-            return out_apkm, f"split subset ({arch}, {density}, {'/'.join(languages)})"
-
-        if "AndroidManifest.xml" in names or any(n.endswith("AndroidManifest.xml") for n in names):
-            shutil.copyfile(raw, out_single)
-            return out_single, f"single apk ({arch})"
-
+def save_base(raw, out_apkm, out_single, arch, densities, languages, include_df):
+    kind = raw_kind(raw)
+    if kind == "bundle":
+        with zipfile.ZipFile(raw) as z:
+            entries = [n for n in z.namelist() if n.lower().endswith(".apk")]
+        keep = select_splits(entries, arch, densities, languages, include_df=include_df)
+        if not keep:
+            return None, None
+        with zipfile.ZipFile(out_apkm, "w", zipfile.ZIP_DEFLATED) as zo:
+            for n in keep:
+                zo.writestr(os.path.basename(n), z.read(n))
+        tag = "no-df" if not include_df else "with-df"
+        return out_apkm, f"split subset {tag} ({arch}, {'/'.join(densities)})"
+    if kind == "single":
+        shutil.copyfile(raw, out_single)
+        return out_single, f"single apk ({arch})"
     return None, None
 
 
@@ -359,28 +347,23 @@ def download_bundle_from_json(url, dest):
 def scrape_apkpure_net(spec, version):
     if not HAS_BS4:
         return None
-
     pkg = spec.get("package", "")
     candidates = []
     for x in [spec.get("apkpure_name"), pkg.split(".")[-1], pkg.replace(".", "-")]:
         if x and x not in candidates:
             candidates.append(x)
-
     for name in candidates:
         urls = []
         if version and version != "latest":
             urls.append(f"https://apkpure.net/{name}/{pkg}/download/{version}")
         urls.append(f"https://apkpure.net/{name}/{pkg}")
         urls.append(f"https://apkpure.net/{name}/{pkg}/versions")
-
         for url in urls:
             try:
                 html = cf_get(url)
                 if not html:
                     continue
-
                 soup = BeautifulSoup(html, "html.parser")
-
                 a = soup.find("a", id="download_link")
                 if a and a.get("href"):
                     href = a["href"]
@@ -388,7 +371,6 @@ def scrape_apkpure_net(spec, version):
                         href = urljoin("https://apkpure.net", href)
                     print(f"APKPure link: {href}")
                     return href
-
                 for a in soup.find_all("a", href=True):
                     href = a["href"]
                     txt = a.get_text(" ", strip=True).lower()
@@ -409,22 +391,18 @@ def scrape_apkpure_net(spec, version):
                                 return out
             except Exception as e:
                 print(f"APKPure scrape failed for {url}: {e}")
-
     return None
 
 
 def scrape_uptodown(spec, version, arch):
     if not HAS_BS4:
         return None
-
     pkg = spec.get("package", "")
     slugs = []
     for x in [spec.get("uptodown_slug"), pkg.split(".")[-1], pkg.replace(".", "-")]:
         if x and x not in slugs:
             slugs.append(x)
-
     locales = ["en", "de", "fr", "in", "it", "ru", "jp", "kr"]
-
     for slug in slugs:
         for loc in locales:
             base = f"https://{slug}.{loc}.uptodown.com/android"
@@ -432,48 +410,38 @@ def scrape_uptodown(spec, version, arch):
                 html = cf_get(base)
                 if not html:
                     continue
-
                 soup = BeautifulSoup(html, "html.parser")
                 h1 = soup.find("h1", id="detail-app-name")
                 if not h1:
                     continue
-
                 code = h1.get("data-code")
                 if not code:
                     continue
-
                 for page in range(1, 11):
                     api = f"{base}/apps/{code}/versions/{page}"
                     js = cf_get(api)
                     if not js:
                         break
-
                     try:
                         entries = (json.loads(js) or {}).get("data") or []
                     except Exception:
                         break
-
                     if not entries:
                         break
-
                     for ent in entries:
                         ev = ent.get("version", "")
                         if version and version != "latest" and ev != version:
                             continue
-
                         parts = ent.get("versionURL") or {}
                         vu = "/".join(str(parts.get(k, "")).strip("/") for k in ["url", "extraURL", "versionID"])
                         if not vu:
                             continue
                         if not vu.startswith("http"):
                             vu = urljoin(base, vu)
-
                         vhtml = cf_get(vu)
                         if not vhtml:
                             continue
-
                         vsoup = BeautifulSoup(vhtml, "html.parser")
-
                         variant_id = None
                         vbtn = vsoup.select_one(".button.variants[data-version]")
                         if vbtn:
@@ -503,7 +471,6 @@ def scrape_uptodown(spec, version, arch):
                                         break
                                 if not variant_id:
                                     variant_id = fallback
-
                         if variant_id:
                             dx = cf_get(f"{base}/download/{variant_id}-x")
                             if dx:
@@ -513,24 +480,20 @@ def scrape_uptodown(spec, version, arch):
                                     out = urljoin("https://dw.uptodown.com/dwn/", btn["data-url"])
                                     print(f"Uptodown link: {out}")
                                     return out
-
                         btn = vsoup.find(id="detail-download-button")
                         if btn and btn.get("data-url"):
                             out = urljoin("https://dw.uptodown.com/dwn/", btn["data-url"])
                             print(f"Uptodown link: {out}")
                             return out
-
                     if version and version != "latest":
                         try:
                             target = parse_ver(version)
-                            all_old = all(parse_ver(e.get("version", "")) < target for e in entries)
-                            if all_old:
+                            if all(parse_ver(e.get("version", "")) < target for e in entries):
                                 break
                         except Exception:
                             pass
             except Exception as e:
                 print(f"Uptodown scrape failed for {base}: {e}")
-
     return None
 
 
@@ -539,9 +502,7 @@ def apkmirror_candidate_pages(spec, version):
     org = spec.get("apkmirror_org", "google-inc")
     names = spec.get("apkmirror_names") or [spec.get("apkmirror_name", "")]
     names = [n for n in names if n]
-
-    found = []
-    seen = set()
+    found, seen = [], set()
     ver_slug = version.replace(".", "-") if version else ""
 
     def add(href):
@@ -554,8 +515,7 @@ def apkmirror_candidate_pages(spec, version):
             found.append(href)
 
     for name in names:
-        app_url = f"{base}/apk/{org}/{name}/"
-        html = cf_get(app_url)
+        html = cf_get(f"{base}/apk/{org}/{name}/")
         if html:
             for href in re.findall(r'href="([^"]+/apk/[^"]+)"', html):
                 if ver_slug and ver_slug not in href:
@@ -565,26 +525,24 @@ def apkmirror_candidate_pages(spec, version):
                 if ver_slug and ver_slug not in href:
                     continue
                 add(href)
-
     if version:
         q = quote_plus(" ".join(names + [version]))
-        search_urls = [
-            f"{base}/?post_type=app_release&searchtype=apk&s={q}",
-            f"{base}/?s={q}",
-        ]
-        for su in search_urls:
+        for su in [f"{base}/?post_type=app_release&searchtype=apk&s={q}", f"{base}/?s={q}"]:
             html = cf_get(su)
             if html:
                 for href in re.findall(r'href="(/apk/[^"]+)"', html):
                     if ver_slug in href:
                         add(href)
-
     return found[:20]
 
 
 def scrape_apkmirror(spec, version, arch, density):
     base = "https://www.apkmirror.com"
     btype = (spec.get("apkmirror_type") or "APK").upper()
+    types = [btype]
+    for t in ["BUNDLE", "APK", "ANY"]:
+        if t not in types:
+            types.append(t)
 
     pages = apkmirror_candidate_pages(spec, version)
     print(f"APKMirror candidate pages for {version}: {len(pages)}")
@@ -594,106 +552,72 @@ def scrape_apkmirror(spec, version, arch, density):
             page = cf_get(page_url)
             if not page:
                 continue
-
-            direct_variant_pages = []
-
-            rows = re.split(r'<div class="[^"]*table-row[^"]*"[^>]*>', page)
-            for row in rows:
-                row_text = re.sub(r"<[^>]+>", " ", row).lower()
-                if "variant" in row_text and "architecture" in row_text:
-                    continue
-
-                badge = re.search(r'apkm-badge[^"]*"[^>]*>\s*([^<]+)\s*</span>', row, re.I)
-                row_type = badge.group(1).strip().upper() if badge else btype
-                if row_type != btype:
-                    continue
-
-                if arch not in row_text and arch.replace("-", "_") not in row_text and "arm64" not in row_text and "universal" not in row_text and "noarch" not in row_text:
-                    continue
-
-                if density and density not in row_text and "nodpi" not in row_text and "anydpi" not in row_text and "dpi" in row_text:
-                    continue
-
-                for href in re.findall(r'href="([^"]+)"', row):
-                    if "/apk/" in href and ("download" in href or version.replace(".", "-") in href):
-                        if href.startswith("/"):
-                            href = base + href
-                        direct_variant_pages.append(href)
-
-            if not direct_variant_pages:
-                for href in re.findall(r'href="([^"]+)"', page):
-                    if "/apk/" in href and "download" in href:
-                        if href.startswith("/"):
-                            href = base + href
-                        direct_variant_pages.append(href)
-
-            seen = set()
-            direct_variant_pages = [x for x in direct_variant_pages if not (x in seen or seen.add(x))]
-
-            for vurl in direct_variant_pages[:10]:
-                vpage = cf_get(vurl)
-                if not vpage:
-                    continue
-
-                m = (
-                    re.search(r'class="[^"]*downloadButton[^"]*"[^>]*href="([^"]+)"', vpage, re.I)
-                    or re.search(r'href="([^"]+)"[^>]*class="[^"]*downloadButton', vpage, re.I)
-                    or re.search(r'href="([^"]+download[^"]*)"', vpage, re.I)
-                )
-                if not m:
-                    continue
-
-                durl = m.group(1)
-                if durl.startswith("/"):
-                    durl = base + durl
-
-                dpage = cf_get(durl)
-                if not dpage:
-                    continue
-
-                m2 = (
-                    re.search(r'id="download-link"[^>]*href="([^"]+)"', dpage, re.I)
-                    or re.search(r'href="([^"]+)"[^>]*id="download-link"', dpage, re.I)
-                )
-                if not m2:
-                    continue
-
-                out = m2.group(1)
-                if out.startswith("/"):
-                    out = base + out
-
-                print(f"APKMirror link: {out}")
-                return out
-
+            for t in types:
+                rows = re.split(r'<div class="[^"]*table-row[^"]*"[^>]*>', page)
+                for row in rows:
+                    row_text = re.sub(r"<[^>]+>", " ", row).lower()
+                    if "variant" in row_text and "architecture" in row_text:
+                        continue
+                    badge = re.search(r'apkm-badge[^"]*"[^>]*>\s*([^<]+)\s*</span>', row, re.I)
+                    row_type = badge.group(1).strip().upper() if badge else "APK"
+                    if t != "ANY" and row_type != t:
+                        continue
+                    if arch not in row_text and arch.replace("-", "_") not in row_text and "arm64" not in row_text and "universal" not in row_text and "noarch" not in row_text:
+                        continue
+                    hrefs = [h for h in re.findall(r'href="([^"]+)"', row) if "/apk/" in h]
+                    if not hrefs:
+                        continue
+                    vurl = hrefs[0]
+                    if not vurl.startswith("http"):
+                        vurl = base + vurl
+                    vpage = cf_get(vurl)
+                    if not vpage:
+                        continue
+                    m = (
+                        re.search(r'class="[^"]*downloadButton[^"]*"[^>]*href="([^"]+)"', vpage, re.I)
+                        or re.search(r'href="([^"]+)"[^>]*class="[^"]*downloadButton', vpage, re.I)
+                    )
+                    if not m:
+                        continue
+                    durl = m.group(1)
+                    if durl.startswith("/"):
+                        durl = base + durl
+                    dpage = cf_get(durl)
+                    if not dpage:
+                        continue
+                    m2 = (
+                        re.search(r'id="download-link"[^>]*href="([^"]+)"', dpage, re.I)
+                        or re.search(r'href="([^"]+)"[^>]*id="download-link"', dpage, re.I)
+                    )
+                    if not m2:
+                        continue
+                    out = m2.group(1)
+                    if out.startswith("/"):
+                        out = base + out
+                    print(f"APKMirror link ({t}): {out}")
+                    return out
         except Exception as e:
             print(f"APKMirror page failed {page_url}: {e}")
-
     return None
 
 
 def find_uploaded_asset(own_repo, up_tag, aid, pkg):
     releases = []
-
     if up_tag:
         r = requests.get(f"https://api.github.com/repos/{own_repo}/releases/tags/{up_tag}", timeout=60)
         if r.status_code == 200:
             releases.append(r.json())
-
     r = requests.get(f"https://api.github.com/repos/{own_repo}/releases/latest", timeout=60)
     if r.status_code == 200:
         releases.append(r.json())
-
     r = requests.get(f"https://api.github.com/repos/{own_repo}/releases?per_page=100", timeout=60)
     if r.status_code == 200:
         releases.extend(r.json())
-
-    seen = set()
-    uniq = []
+    seen, uniq = set(), []
     for rel in releases:
         if isinstance(rel, dict) and rel.get("id") not in seen:
             seen.add(rel.get("id"))
             uniq.append(rel)
-
     ids = [x for x in [aid.lower(), (pkg or "").lower()] if x]
 
     def ok(name):
@@ -708,7 +632,6 @@ def find_uploaded_asset(own_repo, up_tag, aid, pkg):
         for a in rel.get("assets", []):
             if ok(a.get("name", "")):
                 return a, rel.get("tag_name")
-
     return None, None
 
 
@@ -718,8 +641,6 @@ def download_github_release_apk(spec, dest):
     match = (spec.get("match") or "").lower()
     rel = requests.get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}", timeout=60).json()
     assets = rel.get("assets", [])
-    print(f"fallback release assets: {[a.get('name') for a in assets]}")
-
     chosen = None
     if match:
         for a in assets:
@@ -730,151 +651,140 @@ def download_github_release_apk(spec, dest):
         chosen = assets[0]
     if chosen is None:
         raise Exception("No asset found")
-
     download_file(chosen["browser_download_url"], dest)
     return chosen["name"]
 
 
-def acquire_base(app, aid, appver, arch, density, languages):
+def fetch_raw(app, aid, version, source, bundle_only=False):
+    key = (aid, version, bundle_only)
+    if key in RAW_CACHE:
+        return RAW_CACHE[key]
+
     spec = app["apk"]
-    source = spec.get("source", "apkeep")
-    out_apkm = f"build/base_{aid}.apkm"
-    out_single = f"build/base_{aid}.apk"
+    arch = spec.get("arch", "arm64-v8a")
+    default_version = str(spec.get("version") or "latest")
+    result = (None, None)
 
-    up_tag = (spec.get("upload_tag") or "").strip()
-    own_repo = os.environ.get("GITHUB_REPOSITORY", "")
-    if source in ("upload", "apkeep", "scraper") and up_tag and own_repo:
-        asset, tag = find_uploaded_asset(own_repo, up_tag, aid, spec.get("package", ""))
-        if asset:
-            print(f"{aid}: using uploaded asset {asset['name']} from release {tag}")
-            raw = f"build/upload_{aid}.bin"
-            download_file(asset["browser_download_url"], raw)
-            path, mode = save_base_from_zip(raw, out_apkm, out_single, arch, density, languages)
-            if path:
-                return path, "uploaded " + mode, True
+    def accept(raw):
+        k = raw_kind(raw)
+        if k is None:
+            return None
+        if bundle_only and k != "bundle":
+            return None
+        return k
 
-    if source == "apkeep":
+    if not bundle_only and source in ("upload", "apkeep", "scraper"):
+        up_tag = (spec.get("upload_tag") or "").strip()
+        own_repo = os.environ.get("GITHUB_REPOSITORY", "")
+        if up_tag and own_repo and version == default_version:
+            asset, tag = find_uploaded_asset(own_repo, up_tag, aid, spec.get("package", ""))
+            if asset:
+                print(f"{aid}: using uploaded asset {asset['name']} from release {tag}")
+                raw = f"build/raw_{aid}_{safe_name(version)}_upload.bin"
+                try:
+                    download_file(asset["browser_download_url"], raw)
+                    k = accept(raw)
+                    if k:
+                        result = (raw, k)
+                except Exception as e:
+                    print(f"{aid}: uploaded asset failed: {e}")
+
+    if result[0] is None and source in ("apkeep", "scraper", "upload"):
+        raw = f"build/raw_{aid}_{safe_name(version)}_scraper.bin"
+        for label, fn in [
+            ("apkmirror", lambda: scrape_apkmirror(spec, version, arch, app.get("density", "xxhdpi"))),
+            ("apkpure.net", lambda: scrape_apkpure_net(spec, version)),
+            ("uptodown", lambda: scrape_uptodown(spec, version, arch)),
+        ]:
+            try:
+                dl = fn()
+                if not dl:
+                    print(f"{aid}: {label} did not find a link for {version}")
+                    continue
+                if download_browser(dl, raw):
+                    k = accept(raw)
+                    if k:
+                        print(f"{aid}: {label} provided {k} for {version}")
+                        result = (raw, k)
+                        break
+                    else:
+                        print(f"{aid}: {label} result not acceptable (bundle_only={bundle_only})")
+                else:
+                    print(f"{aid}: {label} download invalid")
+            except Exception as e:
+                print(f"{aid}: {label} failed: {e}")
+
+    if result[0] is None and source == "apkeep":
         try:
             apkeep = ensure_apkeep()
-            raw = apkeep_download(apkeep, spec.get("package", ""), appver, arch, f"build/apkeep_{aid}")
+            raw = apkeep_download(apkeep, spec.get("package", ""), version, arch, f"build/apkeep_{aid}_{safe_name(version)}")
             if raw:
-                path, mode = save_base_from_zip(raw, out_apkm, out_single, arch, density, languages)
-                if path:
-                    return path, "apkeep " + mode, True
+                k = accept(raw)
+                if k:
+                    result = (raw, k)
         except Exception as e:
             print(f"{aid}: apkeep failed: {e}")
 
-    if source in ("apkeep", "scraper"):
+    if result[0] is None and source in ("apkeep", "scraper") and version == default_version:
         vc = str(spec.get("version_code") or "").strip()
         pkg = spec.get("package", "")
         if vc and pkg:
             for host in ["d.apkpure.net", "d.apkpure.com"]:
                 try:
                     url = f"https://{host}/b/XAPK/{pkg}?versionCode={vc}"
-                    raw = f"build/direct_{aid}.bin"
+                    raw = f"build/raw_{aid}_{safe_name(version)}_direct.bin"
                     if download_browser(url, raw):
-                        path, mode = save_base_from_zip(raw, out_apkm, out_single, arch, density, languages)
-                        if path:
-                            return path, "direct-apkpure " + mode, True
+                        k = accept(raw)
+                        if k:
+                            result = (raw, k)
+                            break
                 except Exception as e:
                     print(f"{aid}: direct APKPure failed: {e}")
 
-    if source in ("apkeep", "scraper"):
-        print(f"{aid}: trying scrapers for {spec.get('package')} {appver}")
-        raw = f"build/scraper_{aid}.bin"
-
-        for label, fn in [
-            ("apkmirror", lambda: scrape_apkmirror(spec, appver, arch, density)),
-            ("apkpure.net", lambda: scrape_apkpure_net(spec, appver)),
-            ("uptodown", lambda: scrape_uptodown(spec, appver, arch)),
-        ]:
-            try:
-                dl = fn()
-                if not dl:
-                    print(f"{aid}: {label} did not find a link")
-                    continue
-                if download_browser(dl, raw):
-                    path, mode = save_base_from_zip(raw, out_apkm, out_single, arch, density, languages)
-                    if path:
-                        return path, f"{label} {mode}", True
-                else:
-                    print(f"{aid}: {label} download was not a valid zip/apk")
-            except Exception as e:
-                print(f"{aid}: {label} failed: {e}")
-
-    if spec.get("repo") and spec.get("tag"):
+    if result[0] is None and version == default_version and spec.get("repo") and spec.get("tag") and not bundle_only:
         try:
-            name = download_github_release_apk(spec, out_single)
-            return out_single, f"github fallback {name}", True
+            raw = f"build/base_{aid}_gh.apk"
+            download_github_release_apk(spec, raw)
+            k = accept(raw)
+            if k:
+                result = (raw, k)
         except Exception as e:
             print(f"{aid}: github fallback failed: {e}")
 
-    return None, "", False
+    RAW_CACHE[key] = result
+    return result
 
 
-def find_asset(release):
-    for a in release.get("assets", []):
-        n = a.get("name", "").lower()
-        if "arm64" in n and "universal" in n:
-            return a.get("browser_download_url")
-    return None
+def prepare_bases(app, aid, version, source, arch, densities, languages):
+    key = (aid, version)
+    if key in BASE_CACHE:
+        return BASE_CACHE[key]
 
+    sv = safe_name(version)
+    out_full_apkm = f"build/base_{aid}_{sv}_full.apkm"
+    out_slim_apkm = f"build/base_{aid}_{sv}_slim.apkm"
+    out_single = f"build/base_{aid}_{sv}.apk"
 
-def classify(r, stable_tag):
-    name = (r.get("name") or "").strip().lower()
-    tag = r.get("tag_name") or ""
-    if tag == stable_tag or name.startswith("release"):
-        return "stable"
-    if name.startswith("nightly"):
-        return "nightly"
-    if name.startswith("beta"):
-        return "beta"
-    return None
+    raw, kind = fetch_raw(app, aid, version, source, bundle_only=False)
+    if raw is None:
+        BASE_CACHE[key] = None
+        return None
 
-
-def pick_candidates(releases, channel, latest_stable):
-    stable_tag = latest_stable.get("tag_name") if latest_stable else None
-    stable_ver = parse_ver(stable_tag)
-
-    stable_cand = None
-    if latest_stable:
-        url = find_asset(latest_stable)
-        if url:
-            stable_cand = (stable_tag, url)
-
-    old_stables, betas, nightlies, older = [], [], [], []
-    for r in releases:
-        tag = r.get("tag_name") or ""
-        if tag == stable_tag:
-            continue
-        url = find_asset(r)
-        if not url:
-            continue
-        entry = (tag, url)
-        c = classify(r, stable_tag)
-        if c == "stable":
-            old_stables.append(entry)
-        elif c == "beta":
-            betas.append(entry)
-        elif c == "nightly":
-            nightlies.append(entry)
-        if parse_ver(tag) < stable_ver:
-            older.append(entry)
-
-    if channel == "stable":
-        cands = ([stable_cand] if stable_cand else []) + old_stables + older
-    elif channel == "beta":
-        cands = betas + ([stable_cand] if stable_cand else []) + older
+    if kind == "bundle":
+        full = save_base(raw, out_full_apkm, out_single, arch, densities, languages, True)
+        slim = save_base(raw, out_slim_apkm, out_single, arch, densities, languages, False)
+        res = {"full": full, "slim": slim, "single": False}
     else:
-        cands = nightlies + betas + ([stable_cand] if stable_cand else []) + older
+        full = save_base(raw, out_full_apkm, out_single, arch, densities, languages, True)
+        raw2, kind2 = fetch_raw(app, aid, version, source, bundle_only=True)
+        if kind2 == "bundle":
+            slim = save_base(raw2, out_slim_apkm, out_single, arch, densities, languages, False)
+            res = {"full": full, "slim": slim, "single": False}
+        else:
+            res = {"full": full, "slim": full, "single": True}
 
-    out, seen = [], set()
-    for tag, url in cands:
-        if tag and tag not in seen:
-            seen.add(tag)
-            out.append((tag, url))
-
-    return out[:MAX_ATTEMPTS]
+    BASE_CACHE[key] = res
+    return res
 
 
 def generate_options_file(bundles, out_path):
@@ -901,32 +811,26 @@ def set_option_value(opts, key, value):
 def apply_option(entry, key, value):
     opts = entry.setdefault("options", {})
     nk = norm_key(key)
-
     for k in list(opts):
         if k == key or norm_key(k) == nk:
             set_option_value(opts, k, value)
             return
-
     for k in list(opts):
         ok = norm_key(k)
         if nk and ok and (nk in ok or ok in nk):
             set_option_value(opts, k, value)
             return
-
     if len(opts) == 1:
         set_option_value(opts, list(opts)[0], value)
         return
-
     set_option_value(opts, key, value)
 
 
 def enable_entry(entry, vals):
     entry["enabled"] = True
     vals = vals or {}
-
     for k, v in vals.items():
         apply_option(entry, k, v)
-
     pkg = vals.get("packageName") or vals.get("packagename")
     if pkg:
         for k in list((entry.get("options") or {})):
@@ -943,7 +847,6 @@ def make_variant_options(gen_data, per_bundle):
     data = copy.deepcopy(gen_data)
     found = set()
     all_wanted = set()
-
     for i, bundle in enumerate(data):
         wanted = per_bundle[i] if i < len(per_bundle) else {}
         all_wanted |= set(wanted)
@@ -953,7 +856,6 @@ def make_variant_options(gen_data, per_bundle):
                 enable_entry(entry, wanted[name])
             else:
                 entry["enabled"] = False
-
     missing = sorted(all_wanted - found)
     return data, missing
 
@@ -972,7 +874,6 @@ def detect_alias():
     ks = "signing/keystore.jks"
     pw = os.environ.get("KEYSTORE_PASSWORD", "")
     preferred = os.environ.get("KEY_ALIAS", "")
-
     try:
         out = subprocess.run(["keytool", "-list", "-keystore", ks, "-storepass", pw],
                              capture_output=True, text=True)
@@ -989,7 +890,6 @@ def detect_alias():
             return aliases[0]
     except Exception as e:
         print("Alias detection failed:", e)
-
     return preferred
 
 
@@ -1026,14 +926,11 @@ def parse_patches_info(bundles):
     for b in bundles:
         cmd += ["-p", b]
     cmd += ["--with-packages", "--with-options"]
-
     r = subprocess.run(cmd, capture_output=True, text=True)
     print(r.stdout)
-
     info = []
     cur = None
     pending_required = False
-
     for raw in r.stdout.splitlines():
         line = raw.strip()
         if line.startswith("Index:"):
@@ -1056,7 +953,6 @@ def parse_patches_info(bundles):
                 cur["required_opts"].append(cur["last_key"])
             else:
                 pending_required = req
-
     return [x for x in info if x.get("name")]
 
 
@@ -1065,7 +961,6 @@ def compute_auto(info, pkg, exclude, configured, needs_value):
     conf = {x.lower() for x in configured}
     needs = {x.lower() for x in needs_value}
     out = []
-
     for p in info:
         n = p["name"]
         nl = n.lower()
@@ -1075,26 +970,21 @@ def compute_auto(info, pkg, exclude, configured, needs_value):
             continue
         if pkg in p.get("packages", []):
             out.append(n)
-
     return out
 
 
 def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
     data, missing = make_variant_options(gen_data, per_bundle)
-
     opts_path = f"build/options_{safe_name(label)}.json"
     with open(opts_path, "w") as f:
         json.dump(data, f, indent=2)
-
     print(f"OPTIONS FILE FOR {label}:")
     print(open(opts_path).read())
 
     cmd = ["java", "-jar", "build/cli.jar", "patch"]
     for b in bundles:
         cmd += ["-p", b]
-
     cmd += ["--options-file", opts_path]
-
     ks = "signing/keystore.jks"
     if os.path.exists(ks):
         cmd += [
@@ -1103,42 +993,34 @@ def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
             "--keystore-entry-alias", alias,
             "--keystore-entry-password", os.environ.get("KEY_PASSWORD", ""),
         ]
-
     cmd += ["--striplibs", "arm64-v8a", "-o", out_apk, "--continue-on-error", apk_path]
-
     print("Running:", " ".join(cmd))
     r = subprocess.run(cmd, capture_output=True, text=True)
     print(r.stdout)
     if r.stderr:
         print(r.stderr)
-
     applied = []
     for m in re.findall(r"Applied:\s*(.+)", r.stdout):
         m = m.strip()
         if m not in applied:
             applied.append(m)
-
     failed = []
     for m in re.findall(r"FAILED:\s*(.+)", r.stdout + "\n" + r.stderr):
         m = m.strip()
         if m not in failed:
             failed.append(m)
-
     return r.returncode == 0, applied, failed, missing
 
 
 def heal_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
     pb = [dict(x) for x in per_bundle]
     dropped = []
-
     while True:
         ok, applied, failed, missing = run_patch(apk_path, out_apk, gen_data, pb, label, alias, bundles)
         if ok:
             return True, applied, dropped, missing
-
         if not failed:
             return False, applied, dropped, missing
-
         removed = False
         for f in failed:
             fl = f.lower()
@@ -1149,7 +1031,6 @@ def heal_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
                         dropped.append(n)
                         del d[n]
                         removed = True
-
         if not removed:
             return False, applied, dropped, missing
 
@@ -1205,9 +1086,11 @@ def build_extra_app(app, alias, ks_fp, notes):
 
     spec = app["apk"]
     arch = spec.get("arch", "arm64-v8a")
-    density = app.get("density", "xxhdpi")
+    dens = app.get("density", ["xxhdpi"])
+    if isinstance(dens, str):
+        dens = [dens]
     languages = [x.lower() for x in app.get("languages", ["en"])]
-    appver = str(spec.get("version") or "latest")
+    default_version = str(spec.get("version") or "latest")
 
     variants = app.get("variants", [])
 
@@ -1228,16 +1111,18 @@ def build_extra_app(app, alias, ks_fp, notes):
         v["_ok"] = ok
         v["_mpps"] = mpps
 
-    print(f"{aid}: app version for this run: {appver}")
-    apk_path, mode, got = acquire_base(app, aid, appver, arch, density, languages)
-    if not got:
-        notes.append(f"## {aid}\nStatus: Failed (apk source)\n\n")
-        return
-
     for v in variants:
         vid = v["id"]
         if not v.get("_ok"):
             notes.append(f"## {vid}\nStatus: Failed (bundle download)\n\n")
+            continue
+
+        ver = str(v.get("apk_version") or default_version)
+        vsource = v.get("apk_source", spec.get("source", "apkeep"))
+
+        bases = prepare_bases(app, aid, ver, vsource, arch, dens, languages)
+        if not bases:
+            notes.append(f"## {vid}\nStatus: Failed (apk source {ver})\n\n")
             continue
 
         mpps = v["_mpps"]
@@ -1247,16 +1132,13 @@ def build_extra_app(app, alias, ks_fp, notes):
             continue
 
         per_bundle = []
-        needs = [needs_value_names([g]) for g in gen]
         seen_lower = set()
         dup_skipped = []
-
         for i, g in enumerate(gen):
             bundle_cfg = v.get("bundles", [])[i] if i < len(v.get("bundles", [])) else {}
             allow = bundle_cfg.get("patches")
             allow_l = {x.lower() for x in allow} if allow else None
             wanted = {}
-
             for name in sorted((g.get("patches") or {}).keys()):
                 nl = name.lower()
                 if allow_l is not None and nl not in allow_l:
@@ -1266,7 +1148,6 @@ def build_extra_app(app, alias, ks_fp, notes):
                     continue
                 wanted[name] = {}
                 seen_lower.add(nl)
-
             per_bundle.append(wanted)
 
         excludes = {x.lower() for x in v.get("exclude_patches", [])}
@@ -1303,36 +1184,47 @@ def build_extra_app(app, alias, ks_fp, notes):
                     if real.lower() in ("custom branding", "change app name"):
                         per_bundle[i].setdefault(real, {})["appName"] = an
 
-        out = f"build/out_{safe_name(vid)}.apk"
-        ok, applied, dropped, missing = heal_patch(apk_path, out, gen, per_bundle, vid, alias, mpps)
-
         parts = [f"{b['label']}_v{str(b.get('_ver', '?')).lstrip('v')}-{b.get('_status', '?')}" for b in v["bundles"]]
         joined = "_X_".join(parts)
-        final = f"build/{app.get('output_base', aid)}-{appver}-{joined}-patched.apk"
 
-        if ok and os.path.exists(out):
-            shutil.copyfile(out, final)
-            fp = verify_signature(final, ks_fp)
+        modes = ["slim"]
+        if not bases["single"]:
+            modes.append("full")
 
-            note = f"## {vid}\n"
-            note += f"App version: {appver}\n"
-            note += f"Bundles: {', '.join(parts)}\n"
-            note += f"Build mode: {mode}\n"
-            if fp:
-                note += f"Signing fingerprint: {fp}\n"
-            note += "\nApplied patches:\n"
-            note += "\n".join(f"- {x}" for x in applied) if applied else "- none"
-            note += "\n"
-            if dropped:
-                note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
-            if dup_skipped:
-                note += "\nDuplicate patches skipped:\n" + "\n".join(f"- {x}" for x in dup_skipped) + "\n"
-            if missing:
-                note += "\nMissing patches:\n" + "\n".join(f"- {x}" for x in missing) + "\n"
-            note += "\nStatus: Success\n\n"
-            notes.append(note)
-        else:
-            notes.append(f"## {vid}\nStatus: Failed\n\n")
+        for mode in modes:
+            bp, bmode = bases[mode]
+            out = f"build/out_{safe_name(vid)}_{mode}.apk"
+            ok, applied, dropped, missing = heal_patch(bp, out, gen, per_bundle, f"{vid}_{mode}", alias, mpps)
+
+            if mode == "slim":
+                final = f"build/{app.get('output_base', aid)}-{ver}-{joined}-patched.apk"
+                head = f"## {vid}"
+            else:
+                final = f"build/{app.get('output_base', aid)}-{ver}-{joined}-fulldf-patched.apk"
+                head = f"## {vid} (full dynamic features)"
+
+            if ok and os.path.exists(out):
+                shutil.copyfile(out, final)
+                fp = verify_signature(final, ks_fp)
+                note = f"{head}\n"
+                note += f"App version: {ver}\n"
+                note += f"Bundles: {', '.join(parts)}\n"
+                note += f"Build mode: {bmode}\n"
+                if bases["single"]:
+                    note += "Note: base is a single APK; no dynamic-feature splits to remove.\n"
+                if fp:
+                    note += f"Signing fingerprint: {fp}\n"
+                note += "\nApplied patches:\n"
+                note += "\n".join(f"- {x}" for x in applied) if applied else "- none"
+                note += "\n"
+                if dropped:
+                    note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
+                if dup_skipped:
+                    note += "\nDuplicate patches skipped:\n" + "\n".join(f"- {x}" for x in dup_skipped) + "\n"
+                note += "\nStatus: Success\n\n"
+                notes.append(note)
+            else:
+                notes.append(f"{head}\nStatus: Failed\n\n")
 
 
 def download_monochrome_from_kveld9(dest):
