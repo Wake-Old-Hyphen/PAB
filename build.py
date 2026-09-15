@@ -1035,6 +1035,71 @@ def heal_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
             return False, applied, dropped, missing
 
 
+def find_asset(release):
+    for a in release.get("assets", []):
+        n = a.get("name", "").lower()
+        if "arm64" in n and "universal" in n:
+            return a.get("browser_download_url")
+    return None
+
+
+def classify(r, stable_tag):
+    name = (r.get("name") or "").strip().lower()
+    tag = r.get("tag_name") or ""
+    if tag == stable_tag or name.startswith("release"):
+        return "stable"
+    if name.startswith("nightly"):
+        return "nightly"
+    if name.startswith("beta"):
+        return "beta"
+    return None
+
+
+def pick_candidates(releases, channel, latest_stable):
+    stable_tag = latest_stable.get("tag_name") if latest_stable else None
+    stable_ver = parse_ver(stable_tag)
+
+    stable_cand = None
+    if latest_stable:
+        url = find_asset(latest_stable)
+        if url:
+            stable_cand = (stable_tag, url)
+
+    old_stables, betas, nightlies, older = [], [], [], []
+    for r in releases:
+        tag = r.get("tag_name") or ""
+        if tag == stable_tag:
+            continue
+        url = find_asset(r)
+        if not url:
+            continue
+        entry = (tag, url)
+        c = classify(r, stable_tag)
+        if c == "stable":
+            old_stables.append(entry)
+        elif c == "beta":
+            betas.append(entry)
+        elif c == "nightly":
+            nightlies.append(entry)
+        if parse_ver(tag) < stable_ver:
+            older.append(entry)
+
+    if channel == "stable":
+        cands = ([stable_cand] if stable_cand else []) + old_stables + older
+    elif channel == "beta":
+        cands = betas + ([stable_cand] if stable_cand else []) + older
+    else:
+        cands = nightlies + betas + ([stable_cand] if stable_cand else []) + older
+
+    out, seen = [], set()
+    for tag, url in cands:
+        if tag and tag not in seen:
+            seen.add(tag)
+            out.append((tag, url))
+
+    return out[:MAX_ATTEMPTS]
+
+
 def get_apk(tag, url, cache):
     if tag not in cache:
         path = f"build/brave_{safe_name(tag)}.apk"
