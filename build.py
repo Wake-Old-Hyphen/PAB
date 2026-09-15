@@ -282,12 +282,12 @@ def save_base(raw, out_apkm, out_single, arch, densities, languages, include_df)
     if kind == "bundle":
         with zipfile.ZipFile(raw) as z:
             entries = [n for n in z.namelist() if n.lower().endswith(".apk")]
-        keep = select_splits(entries, arch, densities, languages, include_df=include_df)
-        if not keep:
-            return None, None
-        with zipfile.ZipFile(out_apkm, "w", zipfile.ZIP_DEFLATED) as zo:
-            for n in keep:
-                zo.writestr(os.path.basename(n), z.read(n))
+            keep = select_splits(entries, arch, densities, languages, include_df=include_df)
+            if not keep:
+                return None, None
+            with zipfile.ZipFile(out_apkm, "w", zipfile.ZIP_DEFLATED) as zo:
+                for n in keep:
+                    zo.writestr(os.path.basename(n), z.read(n))
         tag = "no-df" if not include_df else "with-df"
         return out_apkm, f"split subset {tag} ({arch}, {'/'.join(densities)})"
     if kind == "single":
