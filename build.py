@@ -731,35 +731,53 @@ def find_uploaded_asset(own_repo, up_tag, aid, pkg, version):
         r = requests.get(f"https://api.github.com/repos/{own_repo}/releases/tags/{up_tag}", timeout=60)
         if r.status_code == 200:
             releases.append(r.json())
-    r = requests.get(f"https://api.github.com/repos/{own_repo}/releases/latest", timeout=60)
-    if r.status_code == 200:
-        releases.append(r.json())
     r = requests.get(f"https://api.github.com/repos/{own_repo}/releases?per_page=100", timeout=60)
     if r.status_code == 200:
         releases.extend(r.json())
+        
     seen, uniq = set(), []
     for rel in releases:
         if isinstance(rel, dict) and rel.get("id") not in seen:
             seen.add(rel.get("id"))
             uniq.append(rel)
             
-    ids = [x for x in [aid.lower(), (pkg or "").lower()] if x]
-    if version:
-        ids.append(version.lower())
+    pkg_lower = (pkg or "").lower()
+    ver_lower = (version or "").lower()
 
     def ok(name):
         n = name.lower()
-        if "patched" in n:
-            return False
-        if not n.endswith((".apk", ".apkm", ".xapk", ".zip")):
-            return False
-        return any(x in n for x in ids)
+        if "patched" in n: return False
+        if not n.endswith((".apk", ".apkm", ".xapk", ".zip")): return False
+        if pkg_lower and pkg_lower not in n: return False
+        if ver_lower and ver_lower not in n: return False
+        return True
 
+    candidates = []
     for rel in uniq:
         for a in rel.get("assets", []):
             if ok(a.get("name", "")):
-                return a, rel.get("tag_name")
-    return None, None
+                candidates.append(a)
+                
+    if not candidates:
+        return None, None
+        
+    multi_arch = [c for c in candidates if "arm64-v8a" in c["name"] and "armeabi-v7a" in c["name"]]
+    
+    if multi_arch:
+        best = multi_arch[0]
+    else:
+        best = candidates[0]
+        
+    tag_name = "unknown"
+    for rel in uniq:
+        for a in rel.get("assets", []):
+            if a.get("id") == best.get("id"):
+                tag_name = rel.get("tag_name", "unknown")
+                break
+        if tag_name != "unknown":
+            break
+            
+    return best, tag_name
 
 
 def download_github_release_apk(spec, dest):
