@@ -68,7 +68,6 @@ extra_apps:
     apk:
       source: "upload"
       package: "com.zhiliaoapp.musically"
-      arch: "arm64-v8a"
       upload_tag: "stock-tiktok-apk"
     variants:
       - id: "TikTok-HXReBorn"
@@ -148,17 +147,17 @@ extra_apps:
     apk:
       source: "upload"
       package: "com.google.android.youtube"
-      version: "21.07.247"
-      arch: "arm64-v8a"
       upload_tag: "stock-tiktok-apk"
     variants:
       - id: "YouTube-Morphe"
+        apk_version: "21.13.164"
         clone_package: "com.yt.zixmophe"
         bundles:
           - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
             label: "Morphe"
 
       - id: "YouTube-Anddea"
+        apk_version: "21.07.247"
         clone_package: "anddea.youtube.zix"
         app_name: "YouTube RVX"
         exclude_patches:
@@ -182,11 +181,10 @@ extra_apps:
     apk:
       source: "upload"
       package: "com.google.android.apps.youtube.music"
-      version: "9.15.51"
-      arch: "arm64-v8a"
       upload_tag: "stock-tiktok-apk"
     variants:
       - id: "YouTubeMusic-Morphe"
+        apk_version: "9.15.51"
         clone_package: "com.yt.muzik.zixmophe"
         bundles:
           - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
@@ -196,15 +194,14 @@ extra_apps:
     output_base: "Google"
     density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
-    keep_all_abis: true  # CRITICAL FIX: Preserves both arm64-v8a and armeabi-v7a to satisfy multiArch manifest
+    keep_all_abis: true
     apk:
       source: "upload"
       package: "com.google.android.googlequicksearchbox"
-      version: "17.54.18"
-      arch: "arm64-v8a"
       upload_tag: "stock-tiktok-apk"
     variants:
       - id: "Google-microG"
+        apk_version: "17.54.18"
         clone_package: "com.google.android.googlequicksearchbox.morphe"
         bundles:
           - url: "https://raw.githubusercontent.com/ryuya0124/gemini-microg-patches/main/patches-bundle.json"
@@ -216,15 +213,14 @@ extra_apps:
     output_base: "Gemini"
     density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
-    keep_all_abis: true  # CRITICAL FIX: Preserves both ABIs
+    keep_all_abis: true
     apk:
       source: "upload"
       package: "com.google.android.apps.bard"
-      version: "1.0.958859967"
-      arch: "arm64-v8a"
       upload_tag: "stock-tiktok-apk"
     variants:
       - id: "Gemini-microG"
+        apk_version: "1.0.958859967"
         clone_package: "com.google.android.apps.bard.morphe"
         bundles:
           - url: "https://raw.githubusercontent.com/ryuya0124/gemini-microg-patches/main/patches-bundle.json"
@@ -237,16 +233,8 @@ extra_apps:
     density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
-      source: "scraper"
+      source: "apkeep"
       package: "com.windscribe.vpn"
-      arch: "arm64-v8a"
-      apkpure_name: "windscribe"
-      uptodown_slug: "windscribe"
-      apkmirror_org: "windscribe"
-      apkmirror_names:
-        - "windscribe-vpn"
-        - "windscribe"
-      apkmirror_type: "ANY"
     variants:
       - id: "Windscribe-MicroG"
         bundles:
@@ -261,16 +249,8 @@ extra_apps:
     density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
-      source: "scraper"
+      source: "apkeep"
       package: "ch.protonmail.android"
-      arch: "arm64-v8a"
-      apkpure_name: "protonmail"
-      uptodown_slug: "protonmail"
-      apkmirror_org: "proton-technologies-ag"
-      apkmirror_names:
-        - "protonmail-encrypted-email"
-        - "protonmail"
-      apkmirror_type: "ANY"
     variants:
       - id: "ProtonMail-Patched"
         bundles:
@@ -282,17 +262,8 @@ extra_apps:
     density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
-      source: "scraper"
+      source: "apkeep"
       package: "ch.protonvpn.android"
-      arch: "arm64-v8a"
-      apkpure_name: "protonvpn"
-      uptodown_slug: "protonvpn"
-      apkmirror_org: "proton-technologies-ag"
-      apkmirror_names:
-        - "protonvpn-secure-and-free-vpn"
-        - "protonvpn-fast-secure-vpn"
-        - "protonvpn"
-      apkmirror_type: "ANY"
     variants:
       - id: "ProtonVPN-Patched"
         bundles:
