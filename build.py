@@ -371,6 +371,34 @@ def download_bundle_from_json(url, dest):
     return ver
 
 
+def download_mpp_from_github(repo, dest):
+    """Downloads the latest .mpp asset directly from GitHub Release Assets."""
+    try:
+        rels = requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=10", timeout=60).json()
+        for r in rels:
+            if r.get("draft"):
+                continue
+            for a in r.get("assets", []):
+                if a.get("name", "").endswith(".mpp"):
+                    print(f"Downloading {a['name']} from {repo} release {r.get('tag_name')}")
+                    download_file(a["browser_download_url"], dest)
+                    return r.get("tag_name", "unknown")
+    except Exception as e:
+        print(f"GitHub release fetch failed for {repo}: {e}")
+    
+    # Fallback to patches-bundle.json if GitHub API fails
+    try:
+        j = requests.get(f"https://raw.githubusercontent.com/{repo}/main/patches-bundle.json", timeout=30).json()
+        dl = j.get("download_url")
+        if dl:
+            download_file(dl, dest)
+            return j.get("version", "unknown")
+    except Exception as e:
+        print(f"patches-bundle.json fallback failed for {repo}: {e}")
+        
+    raise Exception(f"Could not find .mpp for {repo}")
+
+
 def scrape_apkpure_net(spec, version):
     if not HAS_BS4:
         return None
@@ -421,6 +449,63 @@ def scrape_apkpure_net(spec, version):
     return None
 
 
+def scrape_apkcombo(spec, version, arch):
+    pkg = spec.get("package", "")
+    if not pkg:
+        return None
+
+    urls_to_try = []
+    if version and version != "latest":
+        safe_ver = version.replace(" ", "-")
+        urls_to_try.append(f"https://apkcombo.com/search/{pkg}/download/phone-{safe_ver}-apk")
+        urls_to_try.append(f"https://apkcombo.com/search/{pkg}/download/phone-{safe_ver}-xapk")
+        urls_to_try.append(f"https://apkcombo.com/{pkg}/download/phone-{safe_ver}-apk")
+    urls_to_try.append(f"https://apkcombo.com/search/{pkg}/download/apk")
+    urls_to_try.append(f"https://apkcombo.com/search/{pkg}/download/xapk")
+    urls_to_try.append(f"https://apkcombo.com/{pkg}/download/apk")
+
+    for url in urls_to_try:
+        html = cf_get(url)
+        if not html:
+            continue
+            
+        m = re.search(r'href="(https://download\.apkcombo\.com/[^"]+)"', html, re.I)
+        if m:
+            dl_url = m.group(1).replace('&amp;', '&')
+            print(f"APKCombo link: {dl_url}")
+            return dl_url
+            
+        m = re.search(r'"download_url"\s*:\s*"(https://download\.apkcombo\.com/[^"]+)"', html, re.I)
+        if m:
+            dl_url = m.group(1).replace('\\u0026', '&').replace('&amp;', '&')
+            print(f"APKCombo link (json): {dl_url}")
+            return dl_url
+
+        m = re.search(r'href="(/r2\?u=[^"]+)"', html, re.I)
+        if m:
+            dl_url = "https://apkcombo.com" + m.group(1).replace('&amp;', '&')
+            print(f"APKCombo redirect link: {dl_url}")
+            return dl_url
+            
+        m = re.search(r'data-url="([^"]+)"', html, re.I)
+        if m:
+            dl_url = m.group(1).replace('&amp;', '&')
+            if "download" in dl_url or "apkcombo" in dl_url:
+                print(f"APKCombo data-url: {dl_url}")
+                return dl_url
+                
+        m = re.search(r'class="[^"]*download[^"]*"[^>]*href="([^"]+)"', html, re.I)
+        if m and ("apkcombo.com" in m.group(1) or m.group(1).startswith("/")):
+            dl_url = m.group(1)
+            if dl_url.startswith("/"):
+                dl_url = "https://apkcombo.com" + dl_url
+            print(f"APKCombo button link: {dl_url}")
+            return dl_url
+
+    print(f"APKCombo did not find a link for {pkg} {version}")
+    return None
+
+
 def scrape_uptodown(spec, version, arch):
     if not HAS_BS4:
         return None
@@ -444,7 +529,7 @@ def scrape_uptodown(spec, version, arch):
                 code = h1.get("data-code")
                 if not code:
                     continue
-                for page in range(1, 11):
+                for page in range(1, 4):
                     api = f"{base}/apps/{code}/versions/{page}"
                     js = cf_get(api)
                     if not js:
@@ -493,7 +578,7 @@ def scrape_uptodown(spec, version, arch):
                                     fid = rep.get("data-file-id")
                                     if not fallback:
                                         fallback = fid
-                                    if arch in cur_arch or arch.replace("-", "_") in cur_arch:
+                                    if arch in cur_arch or arch.replace("-", "_") in cur_arch or "universal" in cur_arch:
                                         variant_id = fid
                                         break
                                 if not variant_id:
@@ -566,73 +651,86 @@ def apkmirror_candidate_pages(spec, version):
 def scrape_apkmirror_links(spec, version, arch, density, limit=6):
     base = "https://www.apkmirror.com"
     btype = (spec.get("apkmirror_type") or "ANY").upper()
-
-    if btype == "ANY":
-        types = ["BUNDLE", "APK"]
-    else:
-        types = [btype]
-        for t in ["BUNDLE", "APK", "ANY"]:
-            if t not in types:
-                types.append(t)
-
     pages = apkmirror_candidate_pages(spec, version)
-    print(f"APKMirror candidate pages for {version}: {len(pages)}")
     results = []
 
     for page_url in pages:
-        try:
-            page = cf_get(page_url)
-            if not page:
+        page = cf_get(page_url)
+        if not page:
+            continue
+        
+        # Split by table rows using the proven nullcpy/rvb logic
+        rows = re.split(r'<div[^>]*class="[^"]*table-row[^"]*"[^>]*>', page, flags=re.I)
+        
+        for row in rows:
+            row_text = re.sub(r"<[^>]+>", " ", row).lower()
+            
+            # Check architecture
+            arch_match = (
+                arch.replace("-", "_") in row_text or 
+                arch in row_text or 
+                "arm64" in row_text or 
+                "universal" in row_text or 
+                "noarch" in row_text
+            )
+            if not arch_match:
                 continue
-            for t in types:
-                rows = re.split(r'<div class="[^"]*table-row[^"]*"[^>]*>', page)
-                for row in rows:
-                    row_text = re.sub(r"<[^>]+>", " ", row).lower()
-                    if "variant" in row_text and "architecture" in row_text:
-                        continue
-                    badge = re.search(r'apkm-badge[^"]*"[^>]*>\s*([^<]+)\s*</span>', row, re.I)
-                    row_type = badge.group(1).strip().upper() if badge else "APK"
-                    if t != "ANY" and row_type != t:
-                        continue
-                    if arch not in row_text and arch.replace("-", "_") not in row_text and "arm64" not in row_text and "universal" not in row_text and "noarch" not in row_text:
-                        continue
-                    hrefs = [h for h in re.findall(r'href="([^"]+)"', row) if "/apk/" in h]
-                    if not hrefs:
-                        continue
-                    vurl = hrefs[0]
-                    if not vurl.startswith("http"):
-                        vurl = base + vurl
-                    vpage = cf_get(vurl)
-                    if not vpage:
-                        continue
-                    m = (
-                        re.search(r'class="[^"]*downloadButton[^"]*"[^>]*href="([^"]+)"', vpage, re.I)
-                        or re.search(r'href="([^"]+)"[^>]*class="[^"]*downloadButton', vpage, re.I)
-                    )
-                    if not m:
-                        continue
-                    durl = m.group(1)
-                    if durl.startswith("/"):
-                        durl = base + durl
-                    dpage = cf_get(durl)
-                    if not dpage:
-                        continue
-                    m2 = (
-                        re.search(r'id="download-link"[^>]*href="([^"]+)"', dpage, re.I)
-                        or re.search(r'href="([^"]+)"[^>]*id="download-link"', dpage, re.I)
-                    )
-                    if not m2:
-                        continue
-                    out = m2.group(1)
-                    if out.startswith("/"):
-                        out = base + out
-                    if out not in results:
-                        print(f"APKMirror link ({t}): {out}")
-                        results.append(out)
-                    if len(results) >= limit:
-                        return results
-        except Exception as e:
-            print(f"APKMirror page failed {page_url}: {e}")
+                
+            # Check type (APK vs BUNDLE)
+            is_bundle = "bundle" in row_text and "apkm" in row_text
+            is_apk = ("apk" in row_text and not is_bundle) or "forcebaseapk" in row_text
+            
+            if btype == "APK" and not is_apk:
+                continue
+            if btype == "BUNDLE" and not is_bundle:
+                continue
+                
+            # Find the download button href (a.downloadButton)
+            btn_match = re.search(r'<a[^>]+class="[^"]*downloadButton[^"]*"[^>]*href="([^"]+)"', row, re.I)
+            if not btn_match:
+                btn_match = re.search(r'<a[^>]+href="([^"]+)"[^>]*class="[^"]*downloadButton', row, re.I)
+            if not btn_match:
+                btn_match = re.search(r'href="([^"]*-android-apk-download/[^"]*)"', row, re.I)
+            
+            if not btn_match:
+                continue
+                
+            vurl = btn_match.group(1)
+            if not vurl.startswith("http"):
+                vurl = base + vurl
+                
+            vpage = cf_get(vurl)
+            if not vpage:
+                continue
+                
+            # On the download page, look for the final download link (a#download-link)
+            final_match = re.search(r'<a[^>]+id="download-link"[^>]*href="([^"]+)"', vpage, re.I)
+            if not final_match:
+                final_match = re.search(r'<a[^>]+href="([^"]+)"[^>]*id="download-link"', vpage, re.I)
+            if not final_match:
+                final_match = re.search(r'href="([^"]*download\.php\?id=[^"]+)"', vpage, re.I)
+                
+            if not final_match:
+                continue
+                
+            out = final_match.group(1)
+            if out.startswith("/"):
+                out = base + out
+                
+            out = out.replace("&amp;", "&")
+            
+            # Extra check using forcebaseapk parameter
+            if btype == "APK" and "forcebaseapk=true" not in out and "bundle" in out.lower():
+                continue
+            if btype == "BUNDLE" and "forcebaseapk=true" in out:
+                continue
+                
+            if out not in results:
+                print(f"APKMirror link ({'BUNDLE' if is_bundle else 'APK'}): {out}")
+                results.append(out)
+            if len(results) >= limit:
+                return results
+                
     return results
 
 
@@ -734,6 +832,12 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
                     yield ("apkmirror", u)
             except Exception as e:
                 print(f"{aid}: apkmirror scrape failed: {e}")
+            try:
+                u = scrape_apkcombo(spec, version, arch)
+                if u:
+                    yield ("apkcombo", u)
+            except Exception as e:
+                print(f"{aid}: apkcombo scrape failed: {e}")
             try:
                 u = scrape_apkpure_net(spec, version)
                 if u:
@@ -1059,7 +1163,7 @@ def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
             "--keystore-entry-alias", alias,
             "--keystore-entry-password", os.environ.get("KEY_PASSWORD", ""),
         ]
-    cmd += ["--striplibs", "arm64-v8a", "-o", out_apk, "--continue-on-error", apk_path]
+    cmd += ["--striplibs", "arm64-v8a", "-o", out_apk, apk_path]
     print("Running:", " ".join(cmd))
     r = subprocess.run(cmd, capture_output=True, text=True)
     print(r.stdout)
@@ -1083,10 +1187,17 @@ def heal_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
     dropped = []
     while True:
         ok, applied, failed, missing = run_patch(apk_path, out_apk, gen_data, pb, label, alias, bundles)
+        
+        # Strict failure detection: if CLI returned success but output contains FAILED:, force retry
+        if ok and failed:
+            print(f"CLI returned success but patches failed: {failed}. Dropping and retrying.")
+            ok = False
+            
         if ok:
             return True, applied, dropped, missing
         if not failed:
             return False, applied, dropped, missing
+            
         removed = False
         for f in failed:
             fl = f.lower()
@@ -1231,9 +1342,18 @@ def build_extra_app(app, alias, ks_fp, notes):
         for b in v.get("bundles", []):
             mpp = f"bundles/{aid}_{safe_name(b['label'])}.mpp"
             try:
-                ver = download_bundle_from_json(b["url"], mpp)
+                url = b["url"]
+                # Extract repo from URL to download directly from GitHub Release Assets
+                repo_match = re.search(r"github(?:usercontent)?\.com/([^/]+/[^/]+)", url)
+                if repo_match:
+                    repo = repo_match.group(1)
+                    ver = download_mpp_from_github(repo, mpp)
+                else:
+                    # Fallback for non-GitHub URLs (like Icysymmetra's custom API)
+                    ver = download_bundle_from_json(url, mpp)
+                    
                 b["_ver"] = ver
-                b["_status"] = get_release_status(repo_from_url(b["url"]), ver)
+                b["_status"] = get_release_status(repo_from_url(url), ver)
                 mpps.append(mpp)
             except Exception as e:
                 print(f"{v['id']}: bundle failed {b['label']}: {e}")
