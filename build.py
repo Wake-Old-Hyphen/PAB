@@ -240,7 +240,7 @@ def apkeep_download(apkeep, pkg, version, arch, outdir):
     return None
 
 
-def select_splits(entries, arch, densities, languages):
+def select_splits(entries, arch, densities, languages, keep_all_abis=False):
     arch_q = arch.replace("-", "_")
     dens = [d.lower() for d in densities]
     langs = [x.lower() for x in languages]
@@ -252,7 +252,7 @@ def select_splits(entries, arch, densities, languages):
             continue
         qual = b.split(".config.")[-1].replace(".apk", "").lower()
         if qual in ABI_QUALS:
-            if qual == arch_q:
+            if keep_all_abis or qual == arch_q:
                 keep.append(n)
         elif qual in dens:
             keep.append(n)
@@ -304,12 +304,12 @@ def base_manifest_package_ok(raw_path, expected_pkg):
         return True
 
 
-def save_base(raw, out_apkm, out_single, arch, densities, languages):
+def save_base(raw, out_apkm, out_single, arch, densities, languages, keep_all_abis=False):
     kind = raw_kind(raw)
     if kind == "bundle":
         with zipfile.ZipFile(raw) as z:
             entries = [n for n in z.namelist() if n.lower().endswith(".apk")]
-            keep = select_splits(entries, arch, densities, languages)
+            keep = select_splits(entries, arch, densities, languages, keep_all_abis)
             if not keep:
                 return None, None
             with zipfile.ZipFile(out_apkm, "w", zipfile.ZIP_DEFLATED) as zo:
@@ -725,7 +725,7 @@ def scrape_apkmirror_links(spec, version, arch, density, limit=6):
     return results
 
 
-def find_uploaded_asset(own_repo, up_tag, aid, pkg):
+def find_uploaded_asset(own_repo, up_tag, aid, pkg, version):
     releases = []
     if up_tag:
         r = requests.get(f"https://api.github.com/repos/{own_repo}/releases/tags/{up_tag}", timeout=60)
@@ -742,7 +742,10 @@ def find_uploaded_asset(own_repo, up_tag, aid, pkg):
         if isinstance(rel, dict) and rel.get("id") not in seen:
             seen.add(rel.get("id"))
             uniq.append(rel)
+            
     ids = [x for x in [aid.lower(), (pkg or "").lower()] if x]
+    if version:
+        ids.append(version.lower())
 
     def ok(name):
         n = name.lower()
@@ -801,7 +804,7 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
         up_tag = (spec.get("upload_tag") or "").strip()
         own_repo = os.environ.get("GITHUB_REPOSITORY", "")
         if up_tag and own_repo:
-            asset, tag = find_uploaded_asset(own_repo, up_tag, aid, spec.get("package", ""))
+            asset, tag = find_uploaded_asset(own_repo, up_tag, aid, spec.get("package", ""), version)
             if asset:
                 print(f"{aid}: using uploaded asset {asset['name']} from release {tag}")
                 raw = f"build/raw_{aid}_{safe_name(version)}_upload.bin"
@@ -865,7 +868,7 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
         up_tag = (spec.get("upload_tag") or "").strip()
         own_repo = os.environ.get("GITHUB_REPOSITORY", "")
         if up_tag and own_repo and version == default_version:
-            asset, tag = find_uploaded_asset(own_repo, up_tag, aid, spec.get("package", ""))
+            asset, tag = find_uploaded_asset(own_repo, up_tag, aid, spec.get("package", ""), version)
             if asset:
                 print(f"{aid}: scraper failed, falling back to uploaded asset {asset['name']} from release {tag}")
                 raw = f"build/raw_{aid}_{safe_name(version)}_upload_fallback.bin"
@@ -918,7 +921,7 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
     return result
 
 
-def prepare_bases(app, aid, version, source, arch, densities, languages):
+def prepare_bases(app, aid, version, source, arch, densities, languages, keep_all_abis=False):
     key = (aid, version)
     if key in BASE_CACHE:
         return BASE_CACHE[key]
@@ -933,15 +936,15 @@ def prepare_bases(app, aid, version, source, arch, densities, languages):
         return None
 
     if kind == "bundle":
-        res_tuple = save_base(raw, out_apkm, out_single, arch, densities, languages)
+        res_tuple = save_base(raw, out_apkm, out_single, arch, densities, languages, keep_all_abis)
         res = {"base": res_tuple, "single": False}
     else:
         raw2, kind2 = fetch_raw(app, aid, version, source, bundle_only=True)
         if kind2 == "bundle":
-            res_tuple = save_base(raw2, out_apkm, out_single, arch, densities, languages)
+            res_tuple = save_base(raw2, out_apkm, out_single, arch, densities, languages, keep_all_abis)
             res = {"base": res_tuple, "single": False}
         else:
-            res_tuple = save_base(raw, out_apkm, out_single, arch, densities, languages)
+            res_tuple = save_base(raw, out_apkm, out_single, arch, densities, languages, keep_all_abis)
             res = {"base": res_tuple, "single": True}
 
     BASE_CACHE[key] = res
@@ -1134,7 +1137,7 @@ def compute_auto(info, pkg, exclude, configured, needs_value):
     return out
 
 
-def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
+def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles, keep_all_abis=False):
     data, missing = make_variant_options(gen_data, per_bundle)
     opts_path = f"build/options_{safe_name(label)}.json"
     with open(opts_path, "w") as f:
@@ -1154,7 +1157,11 @@ def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
             "--keystore-entry-alias", alias,
             "--keystore-entry-password", os.environ.get("KEY_PASSWORD", ""),
         ]
-    cmd += ["--striplibs", "arm64-v8a", "-o", out_apk, apk_path]
+        
+    if not keep_all_abis:
+        cmd += ["--striplibs", "arm64-v8a"]
+        
+    cmd += ["-o", out_apk, apk_path]
     print("Running:", " ".join(cmd))
     r = subprocess.run(cmd, capture_output=True, text=True)
     print(r.stdout)
@@ -1173,11 +1180,11 @@ def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
     return r.returncode == 0, applied, failed, missing
 
 
-def heal_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
+def heal_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles, keep_all_abis=False):
     pb = [dict(x) for x in per_bundle]
     dropped = []
     while True:
-        ok, applied, failed, missing = run_patch(apk_path, out_apk, gen_data, pb, label, alias, bundles)
+        ok, applied, failed, missing = run_patch(apk_path, out_apk, gen_data, pb, label, alias, bundles, keep_all_abis)
         
         if ok and failed:
             print(f"CLI returned success but patches failed: {failed}. Dropping and retrying.")
@@ -1322,7 +1329,7 @@ def build_extra_app(app, alias, ks_fp, notes):
     if isinstance(dens, str):
         dens = [dens]
     languages = [x.lower() for x in app.get("languages", ["en"])]
-    default_version = str(spec.get("version") or "latest")
+    keep_all_abis = app.get("keep_all_abis", False)
 
     variants = app.get("variants", [])
 
@@ -1356,10 +1363,10 @@ def build_extra_app(app, alias, ks_fp, notes):
             notes.append(f"## {vid}\nStatus: Failed (bundle download)\n\n")
             continue
 
-        ver = str(v.get("apk_version") or default_version)
+        ver = str(v.get("apk_version") or spec.get("version") or "latest")
         vsource = v.get("apk_source", spec.get("source", "apkeep"))
 
-        bases = prepare_bases(app, aid, ver, vsource, arch, dens, languages)
+        bases = prepare_bases(app, aid, ver, vsource, arch, dens, languages, keep_all_abis)
         if not bases:
             notes.append(f"## {vid}\nStatus: Failed (apk source {ver})\n\n")
             continue
@@ -1432,7 +1439,7 @@ def build_extra_app(app, alias, ks_fp, notes):
             continue
 
         out = f"build/out_{safe_name(vid)}.apk"
-        ok, applied, dropped, missing = heal_patch(bp, out, gen, per_bundle, vid, alias, mpps)
+        ok, applied, dropped, missing = heal_patch(bp, out, gen, per_bundle, vid, alias, mpps, keep_all_abis)
 
         final = f"build/{app.get('output_base', aid)}-{ver}-{joined}-patched.apk"
         head = f"## {vid}"
@@ -1446,6 +1453,8 @@ def build_extra_app(app, alias, ks_fp, notes):
             note += f"Build mode: {bmode}\n"
             if bases["single"]:
                 note += "Note: base is a single APK; no dynamic-feature splits to merge.\n"
+            if keep_all_abis:
+                note += "Note: kept all ABIs to satisfy multiArch manifest.\n"
             if fp:
                 note += f"Signing fingerprint: {fp}\n"
             note += "\nApplied patches:\n"
@@ -1601,28 +1610,21 @@ def main():
                 n_patch = resolve("change app name", names)
                 c_patch = resolve("clone app", names)
 
-            exact_asset = variant.get("exact_asset")
-            if exact_asset:
-                asset_url = None
+            exact_asset_url = variant.get("exact_asset_url")
+            if exact_asset_url:
                 target_tag = "unknown"
-                for r in brave_releases:
-                    for a in r.get("assets", []):
-                        # CASE-INSENSITIVE COMPARISON FIX
-                        if a.get("name", "").lower() == exact_asset.lower():
-                            asset_url = a["browser_download_url"]
-                            target_tag = r.get("tag_name", "unknown")
-                            break
-                    if asset_url:
-                        break
+                m = re.search(r"/download/(v[^/]+)/", exact_asset_url)
+                if m:
+                    target_tag = m.group(1)
                 
-                if not asset_url:
-                    print(f"Could not find exact_asset {exact_asset} in Brave releases")
-                    notes.append(f"## {variant['output_name']}\nStatus: Failed (exact_asset not found)\n\n")
-                    continue
-                
-                apk_path = f"build/brave_{safe_name(target_tag)}_{exact_asset}"
+                apk_path = f"build/brave_{safe_name(target_tag)}_exact.apk"
                 if not os.path.exists(apk_path):
-                    download_file(asset_url, apk_path)
+                    try:
+                        download_file(exact_asset_url, apk_path)
+                    except Exception as e:
+                        print(f"Could not download exact_asset {exact_asset_url}: {e}")
+                        notes.append(f"## {variant['output_name']}\nStatus: Failed (exact_asset download)\n\n")
+                        continue
                 
                 exact_patches = variant.get("exact_patches", {})
                 if exact_patches:
@@ -1663,7 +1665,7 @@ def main():
                     fp = None
                 
                 note = f"## {variant['output_name']}\n"
-                note += f"Brave version: {target_tag} (Exact Asset: {exact_asset})\n"
+                note += f"Brave version: {target_tag} (Exact Asset URL)\n"
                 note += f"Patch bundles: {dh6k_tag}, official {official_tag}\n"
                 if fp: note += f"Signing fingerprint: {fp}\n"
                 note += "\nApplied patches:\n"
