@@ -35,16 +35,35 @@ variants:
     output_name: "Brave-Mono-Stable"
     clone_package: "com.brave.mono"
     app_name: "Brave Mono"
+    exact_asset: "Bravemonoarm64.apk"
+    exact_patches:
+      "Clone app":
+        packageName: "com.brave.mono"
+        updatePermissions: true
+        updateProviders: true
+      "Change app icon":
+        customIcon: "assets/isoamoledbraveicon.png"
+      "Disable analytics": {}
+      "Change app name":
+        appName: "Brave Mono"
+      "Block Brave Telemetry": {}
+      "Brave In-Product & Commercial Notification Optimizer": {}
+      "Brave Origin": {}
+      "Brave Startup Performance Optimization": {}
+      "Disable Background Sync & Periodic Sync": {}
+      "Disable Battery Status API & OS Listener": {}
+      "Locale PAK Slimmer": {}
+      "Native Bloat Slimmer": {}
+      "Skip First Run": {}
     bundles:
       - "dh6k"
       - "official"
       - "kveld9"
-    fallback_monochrome: true
 
 extra_apps:
   - id: tiktok
     output_base: "TikTok"
-    density: ["332dpi", "xhdpi", "xxhdpi"]
+    density: ["nodpi"]
     languages: ["en"]
     apk:
       source: "scraper"
@@ -60,10 +79,10 @@ extra_apps:
       uptodown_slug: "tiktok"
       apkmirror_org: "tiktok-pte-ltd"
       apkmirror_names:
-        - "tiktok"
-        - "tik-tok"
         - "tik-tok-including-musical-ly"
-      apkmirror_type: "ANY"
+        - "tik-tok"
+        - "tiktok"
+      apkmirror_type: "APK"
     variants:
       - id: "TikTok-HXReborn"
         bundles:
