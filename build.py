@@ -1,5 +1,6 @@
 import os
 import re
+import io
 import json
 import yaml
 import copy
@@ -275,6 +276,35 @@ def raw_kind(raw):
     return None
 
 
+def base_manifest_package_ok(raw_path, expected_pkg):
+    """Verify the base APK inside a bundle (or a single APK) declares expected_pkg."""
+    if not expected_pkg:
+        return True
+    try:
+        with zipfile.ZipFile(raw_path) as z:
+            names = z.namelist()
+            apk_entries = [n for n in names if n.lower().endswith(".apk")]
+            if apk_entries:
+                base_entry = None
+                for n in apk_entries:
+                    b = os.path.basename(n).lower()
+                    if not b.startswith("split_") and not b.startswith("config."):
+                        base_entry = n
+                        break
+                if base_entry is None:
+                    base_entry = apk_entries[0]
+                with zipfile.ZipFile(io.BytesIO(z.read(base_entry))) as za:
+                    data = za.read("AndroidManifest.xml")
+            else:
+                data = z.read("AndroidManifest.xml")
+        ok = (expected_pkg.encode("utf-8") in data) or (expected_pkg.encode("utf-16-le") in data)
+        print(f"package verification for {expected_pkg}: {'OK' if ok else 'MISMATCH'}")
+        return ok
+    except Exception as e:
+        print(f"package verification could not read manifest ({e}); accepting")
+        return True
+
+
 def save_base(raw, out_apkm, out_single, arch, densities, languages):
     kind = raw_kind(raw)
     if kind == "bundle":
@@ -533,10 +563,10 @@ def apkmirror_candidate_pages(spec, version):
     return found[:20]
 
 
-def scrape_apkmirror(spec, version, arch, density):
+def scrape_apkmirror_links(spec, version, arch, density, limit=6):
     base = "https://www.apkmirror.com"
     btype = (spec.get("apkmirror_type") or "ANY").upper()
-    
+
     if btype == "ANY":
         types = ["BUNDLE", "APK"]
     else:
@@ -547,6 +577,7 @@ def scrape_apkmirror(spec, version, arch, density):
 
     pages = apkmirror_candidate_pages(spec, version)
     print(f"APKMirror candidate pages for {version}: {len(pages)}")
+    results = []
 
     for page_url in pages:
         try:
@@ -595,11 +626,14 @@ def scrape_apkmirror(spec, version, arch, density):
                     out = m2.group(1)
                     if out.startswith("/"):
                         out = base + out
-                    print(f"APKMirror link ({t}): {out}")
-                    return out
+                    if out not in results:
+                        print(f"APKMirror link ({t}): {out}")
+                        results.append(out)
+                    if len(results) >= limit:
+                        return results
         except Exception as e:
             print(f"APKMirror page failed {page_url}: {e}")
-    return None
+    return results
 
 
 def find_uploaded_asset(own_repo, up_tag, aid, pkg):
@@ -692,28 +726,45 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
 
     if result[0] is None and source in ("apkeep", "scraper", "upload"):
         raw = f"build/raw_{aid}_{safe_name(version)}_scraper.bin"
-        for label, fn in [
-            ("apkmirror", lambda: scrape_apkmirror(spec, version, arch, app.get("density", "xxhdpi"))),
-            ("apkpure.net", lambda: scrape_apkpure_net(spec, version)),
-            ("uptodown", lambda: scrape_uptodown(spec, version, arch)),
-        ]:
+        expected_pkg = spec.get("package", "")
+
+        def scraper_candidates():
             try:
-                dl = fn()
-                if not dl:
-                    print(f"{aid}: {label} did not find a link for {version}")
-                    continue
-                if download_browser(dl, raw):
-                    k = accept(raw)
-                    if k:
-                        print(f"{aid}: {label} provided {k} for {version}")
-                        result = (raw, k)
-                        break
-                    else:
-                        print(f"{aid}: {label} result not acceptable (bundle_only={bundle_only})")
-                else:
-                    print(f"{aid}: {label} download invalid")
+                for u in scrape_apkmirror_links(spec, version, arch, app.get("density", "xxhdpi")):
+                    yield ("apkmirror", u)
             except Exception as e:
-                print(f"{aid}: {label} failed: {e}")
+                print(f"{aid}: apkmirror scrape failed: {e}")
+            try:
+                u = scrape_apkpure_net(spec, version)
+                if u:
+                    yield ("apkpure.net", u)
+                else:
+                    print(f"{aid}: apkpure.net did not find a link for {version}")
+            except Exception as e:
+                print(f"{aid}: apkpure.net scrape failed: {e}")
+            try:
+                u = scrape_uptodown(spec, version, arch)
+                if u:
+                    yield ("uptodown", u)
+                else:
+                    print(f"{aid}: uptodown did not find a link for {version}")
+            except Exception as e:
+                print(f"{aid}: uptodown scrape failed: {e}")
+
+        for label, dl in scraper_candidates():
+            if not download_browser(dl, raw):
+                print(f"{aid}: {label} download invalid")
+                continue
+            if not base_manifest_package_ok(raw, expected_pkg):
+                print(f"{aid}: {label} base package is NOT {expected_pkg} - skipping this candidate")
+                continue
+            k = accept(raw)
+            if k:
+                print(f"{aid}: {label} provided {k} for {version}")
+                result = (raw, k)
+                break
+            else:
+                print(f"{aid}: {label} result not acceptable (bundle_only={bundle_only})")
 
     if result[0] is None and source == "scraper":
         up_tag = (spec.get("upload_tag") or "").strip()
@@ -1441,6 +1492,78 @@ def main():
                     names |= set((g.get("patches") or {}).keys())
                 n_patch = resolve("change app name", names)
                 c_patch = resolve("clone app", names)
+
+            exact_asset = variant.get("exact_asset")
+            if exact_asset:
+                asset_url = None
+                target_tag = "unknown"
+                for r in brave_releases:
+                    for a in r.get("assets", []):
+                        if a.get("name") == exact_asset:
+                            asset_url = a["browser_download_url"]
+                            target_tag = r.get("tag_name", "unknown")
+                            break
+                    if asset_url:
+                        break
+                
+                if not asset_url:
+                    print(f"Could not find exact_asset {exact_asset} in Brave releases")
+                    notes.append(f"## {variant['output_name']}\nStatus: Failed (exact_asset not found)\n\n")
+                    continue
+                
+                apk_path = f"build/brave_{safe_name(target_tag)}_{exact_asset}"
+                if not os.path.exists(apk_path):
+                    download_file(asset_url, apk_path)
+                
+                exact_patches = variant.get("exact_patches", {})
+                if exact_patches:
+                    per_bundle = [{} for _ in gen]
+                    for patch_name, opts in exact_patches.items():
+                        for i, g in enumerate(gen):
+                            if patch_name in (g.get("patches") or {}):
+                                per_bundle[i][patch_name] = opts
+                                break
+                else:
+                    per_bundle = []
+                    for g in gen:
+                        d = {}
+                        for n in sorted((g.get("patches") or {}).keys()):
+                            if n in brave_base: d[n] = brave_base[n]
+                            elif n in auto: d[n] = {}
+                        per_bundle.append(d)
+                
+                if variant.get("app_name") and n_patch and not any(n_patch in pb for pb in per_bundle):
+                    for i, g in enumerate(gen):
+                        if n_patch in (g.get("patches") or {}):
+                            per_bundle[i][n_patch] = {"appName": variant["app_name"]}
+                            break
+                if variant.get("clone_package") and c_patch and not any(c_patch in pb for pb in per_bundle):
+                    for i, g in enumerate(gen):
+                        if c_patch in (g.get("patches") or {}):
+                            per_bundle[i][c_patch] = {"packageName": variant["clone_package"]}
+                            break
+
+                out = f"build/out_{safe_name(variant['id'])}_{safe_name(target_tag)}.apk"
+                ok, applied, dropped, missing = heal_patch(apk_path, out, gen, per_bundle, variant["id"], alias, bundles)
+                
+                final = f"build/{variant['output_name']}-{target_tag}-{dh6k_tag}-patched.apk"
+                if ok and os.path.exists(out):
+                    shutil.copyfile(out, final)
+                    fp = verify_signature(final, ks_fp)
+                else:
+                    fp = None
+                
+                note = f"## {variant['output_name']}\n"
+                note += f"Brave version: {target_tag} (Exact Asset: {exact_asset})\n"
+                note += f"Patch bundles: {dh6k_tag}, official {official_tag}\n"
+                if fp: note += f"Signing fingerprint: {fp}\n"
+                note += "\nApplied patches:\n"
+                note += "\n".join(f"- {x}" for x in applied) if applied else "- none"
+                note += "\n"
+                if dropped: note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
+                note += "\nStatus: " + ("Success" if ok else "Failed") + "\n\n"
+                notes.append(note)
+                continue
 
             per_bundle = []
             for g in gen:
