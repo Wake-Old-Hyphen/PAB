@@ -35,7 +35,7 @@ variants:
     output_name: "Brave-Mono-Stable"
     clone_package: "com.brave.mono"
     app_name: "Brave Mono"
-    exact_asset: "BraveMonoarm64.apk"  # FIXED: Capital M in Mono
+    exact_asset_url: "https://github.com/brave/brave-browser/releases/download/v1.95.101/Bravemonoarm64.apk"
     exact_patches:
       "Clone app":
         packageName: "com.brave.mono"
@@ -68,32 +68,21 @@ extra_apps:
     apk:
       source: "upload"
       package: "com.zhiliaoapp.musically"
-      version: "46.2.3"
-      version_code: "2024602030"
       arch: "arm64-v8a"
       upload_tag: "stock-tiktok-apk"
-      repo: "hxreborn/Morphe-AutoBuilds"
-      tag: "stock-apks"
-      match: "46.2.3"
-      apkpure_name: "tiktok"
-      uptodown_slug: "tiktok"
-      apkmirror_org: "tiktok-pte-ltd"
-      apkmirror_names:
-        - "tik-tok-including-musical-ly"
-        - "tik-tok"
-        - "tiktok"
-      apkmirror_type: "APK"
     variants:
-      - id: "TikTok-HXReborn"
+      - id: "TikTok-HXReBorn"
+        apk_version: "46.2.3"
         bundles:
           - url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
-            label: "HXReborn"
+            label: "HXReBorn"
           - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
             label: "Nai64"
             patches:
               - "Empty Clipboard Report"
 
       - id: "TikTok-Icysymmetra"
+        apk_version: "46.2.3"
         bundles:
           - url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"
             label: "Icysymmetra"
@@ -103,6 +92,7 @@ extra_apps:
               - "Empty Clipboard Report"
 
       - id: "TikTok-Hushfeed"
+        apk_version: "46.2.3"
         bundles:
           - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
             label: "Hushfeed"
@@ -111,11 +101,8 @@ extra_apps:
             patches:
               - "Empty Clipboard Report"
 
-      # REMOVED: TikTok-Kveld9XHushfeed
-
       - id: "TikTok-46.7.3-Hushfeed"
         apk_version: "46.7.3"
-        apk_source: "upload"
         bundles:
           - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
             label: "Hushfeed"
@@ -126,7 +113,16 @@ extra_apps:
 
       - id: "TikTok-46.8.3-Hushfeed"
         apk_version: "46.8.3"
-        apk_source: "upload"
+        bundles:
+          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
+            label: "Hushfeed"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+            label: "Nai64"
+            patches:
+              - "Empty Clipboard Report"
+
+      - id: "TikTok-46.9.3-Hushfeed"
+        apk_version: "46.9.3"
         bundles:
           - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
             label: "Hushfeed"
@@ -137,7 +133,6 @@ extra_apps:
 
       - id: "TikTok-46.9.3-Kveld9"
         apk_version: "46.9.3"
-        apk_source: "upload"
         bundles:
           - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
             label: "Kveld9"
@@ -151,16 +146,11 @@ extra_apps:
     density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
-      source: "scraper"
+      source: "upload"
       package: "com.google.android.youtube"
       version: "21.07.247"
       arch: "arm64-v8a"
-      apkpure_name: "youtube"
-      uptodown_slug: "youtube"
-      apkmirror_org: "google-inc"
-      apkmirror_names:
-        - "youtube"
-      apkmirror_type: "ANY"
+      upload_tag: "stock-tiktok-apk"
     variants:
       - id: "YouTube-Morphe"
         clone_package: "com.yt.zixmophe"
@@ -190,20 +180,55 @@ extra_apps:
     density: ["332dpi", "xhdpi", "xxhdpi"]
     languages: ["en"]
     apk:
-      source: "scraper"
+      source: "upload"
       package: "com.google.android.apps.youtube.music"
       version: "9.15.51"
       arch: "arm64-v8a"
-      apkpure_name: "youtube-music"
-      uptodown_slug: "youtube-music"
-      apkmirror_org: "google-inc"
-      apkmirror_names:
-        - "youtube-music"
-      apkmirror_type: "ANY"
+      upload_tag: "stock-tiktok-apk"
     variants:
       - id: "YouTubeMusic-Morphe"
         clone_package: "com.yt.muzik.zixmophe"
         bundles:
+          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
+            label: "Morphe"
+
+  - id: google
+    output_base: "Google"
+    density: ["332dpi", "xhdpi", "xxhdpi"]
+    languages: ["en"]
+    keep_all_abis: true  # CRITICAL FIX: Preserves both arm64-v8a and armeabi-v7a to satisfy multiArch manifest
+    apk:
+      source: "upload"
+      package: "com.google.android.googlequicksearchbox"
+      version: "17.54.18"
+      arch: "arm64-v8a"
+      upload_tag: "stock-tiktok-apk"
+    variants:
+      - id: "Google-microG"
+        clone_package: "com.google.android.googlequicksearchbox.morphe"
+        bundles:
+          - url: "https://raw.githubusercontent.com/ryuya0124/gemini-microg-patches/main/patches-bundle.json"
+            label: "GeminiMicroG"
+          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
+            label: "Morphe"
+
+  - id: gemini
+    output_base: "Gemini"
+    density: ["332dpi", "xhdpi", "xxhdpi"]
+    languages: ["en"]
+    keep_all_abis: true  # CRITICAL FIX: Preserves both ABIs
+    apk:
+      source: "upload"
+      package: "com.google.android.apps.bard"
+      version: "1.0.958859967"
+      arch: "arm64-v8a"
+      upload_tag: "stock-tiktok-apk"
+    variants:
+      - id: "Gemini-microG"
+        clone_package: "com.google.android.apps.bard.morphe"
+        bundles:
+          - url: "https://raw.githubusercontent.com/ryuya0124/gemini-microg-patches/main/patches-bundle.json"
+            label: "GeminiMicroG"
           - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
             label: "Morphe"
 
@@ -225,10 +250,10 @@ extra_apps:
     variants:
       - id: "Windscribe-MicroG"
         bundles:
-          - url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/dev/patches-bundle.json"
+          - url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/main/patches-bundle.json"
             label: "Rushiranpise"
             patches:
-              - "GmsCore support"
+              - "GmsCore support (MicroG)"
               - "Unlock Premium"
 
   - id: protonmail
@@ -249,8 +274,8 @@ extra_apps:
     variants:
       - id: "ProtonMail-Patched"
         bundles:
-          - url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/dev/patches-bundle.json"
-            label: "Rushiranpise"
+          - url: "https://raw.githubusercontent.com/hxreborn/morphe-patches/main/patches-bundle.json"
+            label: "HXReborn"
 
   - id: protonvpn
     output_base: "ProtonVPN"
@@ -271,11 +296,11 @@ extra_apps:
     variants:
       - id: "ProtonVPN-Patched"
         bundles:
-          - url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/dev/patches-bundle.json"
+          - url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/main/patches-bundle.json"
             label: "Rushiranpise"
             patches:
               - "Unlock VPN Plus"
-          - url: "https://raw.githubusercontent.com/kondratjev/morphe-patches/dev/patches-bundle.json"
+          - url: "https://raw.githubusercontent.com/kondratjev/morphe-patches/main/patches-bundle.json"
             label: "Kondratjev"
             patches:
               - "Disable analytics"
@@ -283,53 +308,3 @@ extra_apps:
             label: "Paresh"
             patches:
               - "Disable telemetry"
-
-  - id: gemini
-    output_base: "Gemini"
-    density: ["332dpi", "xhdpi", "xxhdpi"]
-    languages: ["en"]
-    apk:
-      source: "scraper"
-      package: "com.google.android.apps.bard"
-      version: "1.0.958859967"
-      arch: "arm64-v8a"
-      apkpure_name: "gemini"
-      uptodown_slug: "gemini"
-      apkmirror_org: "google-inc"
-      apkmirror_names:
-        - "gemini"
-        - "google-gemini"
-      apkmirror_type: "ANY"
-    variants:
-      - id: "Gemini-microG"
-        clone_package: "com.google.android.apps.bard.morphe"
-        bundles:
-          - url: "https://raw.githubusercontent.com/ryuya0124/gemini-microg-patches/main/patches-bundle.json"
-            label: "GeminiMicroG"
-          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
-            label: "Morphe"
-
-  - id: google
-    output_base: "Google"
-    density: ["332dpi", "xhdpi", "xxhdpi"]
-    languages: ["en"]
-    apk:
-      source: "scraper"
-      package: "com.google.android.googlequicksearchbox"
-      version: ""  # FIXED: Removed version pin so scraper grabs latest available
-      arch: "arm64-v8a"
-      apkpure_name: "google"
-      uptodown_slug: "google"
-      apkmirror_org: "google-inc"
-      apkmirror_names:
-        - "google-search"
-        - "google"
-      apkmirror_type: "ANY"
-    variants:
-      - id: "Google-microG"
-        clone_package: "com.google.android.googlequicksearchbox.morphe"
-        bundles:
-          - url: "https://raw.githubusercontent.com/ryuya0124/gemini-microg-patches/main/patches-bundle.json"
-            label: "GeminiMicroG"
-          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
-            label: "Morphe"
