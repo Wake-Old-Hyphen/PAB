@@ -35,7 +35,7 @@ variants:
     output_name: "Brave-Mono-Stable"
     clone_package: "com.brave.mono"
     app_name: "Brave Mono"
-    exact_asset: "BraveMonoarm64.apk"
+    exact_asset: "BraveMonoarm64.apk"  # FIXED: Capital M in Mono
     exact_patches:
       "Clone app":
         packageName: "com.brave.mono"
@@ -66,7 +66,7 @@ extra_apps:
     density: ["nodpi"]
     languages: ["en"]
     apk:
-      source: "scraper"
+      source: "upload"
       package: "com.zhiliaoapp.musically"
       version: "46.2.3"
       version_code: "2024602030"
@@ -82,12 +82,12 @@ extra_apps:
         - "tik-tok-including-musical-ly"
         - "tik-tok"
         - "tiktok"
-      apkmirror_type: "APK" # CRITICAL FIX: Forces Single APK (nodpi) exactly as patch authors require
+      apkmirror_type: "APK"
     variants:
       - id: "TikTok-HXReborn"
         bundles:
           - url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
-            label: "HXReBorn"
+            label: "HXReborn"
           - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
             label: "Nai64"
             patches:
@@ -111,21 +111,11 @@ extra_apps:
             patches:
               - "Empty Clipboard Report"
 
-      - id: "TikTok-Kveld9XHushfeed"
-        merge_exclusive: true
-        bundles:
-          - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
-            label: "Kveld9"
-          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
-            label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
+      # REMOVED: TikTok-Kveld9XHushfeed
 
       - id: "TikTok-46.7.3-Hushfeed"
         apk_version: "46.7.3"
-        apk_source: "scraper"
+        apk_source: "upload"
         bundles:
           - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
             label: "Hushfeed"
@@ -136,7 +126,7 @@ extra_apps:
 
       - id: "TikTok-46.8.3-Hushfeed"
         apk_version: "46.8.3"
-        apk_source: "scraper"
+        apk_source: "upload"
         bundles:
           - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
             label: "Hushfeed"
@@ -147,7 +137,7 @@ extra_apps:
 
       - id: "TikTok-46.9.3-Kveld9"
         apk_version: "46.9.3"
-        apk_source: "scraper"
+        apk_source: "upload"
         bundles:
           - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
             label: "Kveld9"
@@ -274,7 +264,7 @@ extra_apps:
       uptodown_slug: "protonvpn"
       apkmirror_org: "proton-technologies-ag"
       apkmirror_names:
-        - "protonvpn-secure-and-free-vpn" # CRITICAL FIX: Correct slug
+        - "protonvpn-secure-and-free-vpn"
         - "protonvpn-fast-secure-vpn"
         - "protonvpn"
       apkmirror_type: "ANY"
@@ -326,7 +316,7 @@ extra_apps:
     apk:
       source: "scraper"
       package: "com.google.android.googlequicksearchbox"
-      version: "17.54.18"
+      version: ""  # FIXED: Removed version pin so scraper grabs latest available
       arch: "arm64-v8a"
       apkpure_name: "google"
       uptodown_slug: "google"
