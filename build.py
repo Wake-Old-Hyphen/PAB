@@ -1167,6 +1167,11 @@ def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles, ke
     for b in bundles:
         cmd += ["-p", b]
     cmd += ["--options-file", opts_path]
+    
+    # CRITICAL FIX: Skip the strict APK version compatibility check.
+    # This allows Hushfeed (which declares 46.2.3) to successfully patch 46.7.3/46.8.3/46.9.3
+    cmd += ["--force"]
+    
     ks = "signing/keystore.jks"
     if os.path.exists(ks):
         cmd += [
