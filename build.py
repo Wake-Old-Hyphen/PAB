@@ -277,7 +277,6 @@ def raw_kind(raw):
 
 
 def base_manifest_package_ok(raw_path, expected_pkg):
-    """Verify the base APK inside a bundle (or a single APK) declares expected_pkg."""
     if not expected_pkg:
         return True
     try:
@@ -316,7 +315,7 @@ def save_base(raw, out_apkm, out_single, arch, densities, languages):
             with zipfile.ZipFile(out_apkm, "w", zipfile.ZIP_DEFLATED) as zo:
                 for n in keep:
                     zo.writestr(os.path.basename(n), z.read(n))
-        return out_apkm, f"split subset with-df ({arch}, {'/'.join(densities)})"
+        return out_apkm, f"split subset ({arch}, {'/'.join(densities)})"
     if kind == "single":
         shutil.copyfile(raw, out_single)
         return out_single, f"single apk ({arch})"
@@ -372,7 +371,6 @@ def download_bundle_from_json(url, dest):
 
 
 def download_mpp_from_github(repo, dest):
-    """Downloads the latest .mpp asset directly from GitHub Release Assets."""
     try:
         rels = requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=10", timeout=60).json()
         for r in rels:
@@ -386,7 +384,6 @@ def download_mpp_from_github(repo, dest):
     except Exception as e:
         print(f"GitHub release fetch failed for {repo}: {e}")
     
-    # Fallback to patches-bundle.json if GitHub API fails
     try:
         j = requests.get(f"https://raw.githubusercontent.com/{repo}/main/patches-bundle.json", timeout=30).json()
         dl = j.get("download_url")
@@ -659,13 +656,11 @@ def scrape_apkmirror_links(spec, version, arch, density, limit=6):
         if not page:
             continue
         
-        # Split by table rows using the proven nullcpy/rvb logic
         rows = re.split(r'<div[^>]*class="[^"]*table-row[^"]*"[^>]*>', page, flags=re.I)
         
         for row in rows:
             row_text = re.sub(r"<[^>]+>", " ", row).lower()
             
-            # Check architecture
             arch_match = (
                 arch.replace("-", "_") in row_text or 
                 arch in row_text or 
@@ -676,7 +671,6 @@ def scrape_apkmirror_links(spec, version, arch, density, limit=6):
             if not arch_match:
                 continue
                 
-            # Check type (APK vs BUNDLE)
             is_bundle = "bundle" in row_text and "apkm" in row_text
             is_apk = ("apk" in row_text and not is_bundle) or "forcebaseapk" in row_text
             
@@ -685,7 +679,6 @@ def scrape_apkmirror_links(spec, version, arch, density, limit=6):
             if btype == "BUNDLE" and not is_bundle:
                 continue
                 
-            # Find the download button href (a.downloadButton)
             btn_match = re.search(r'<a[^>]+class="[^"]*downloadButton[^"]*"[^>]*href="([^"]+)"', row, re.I)
             if not btn_match:
                 btn_match = re.search(r'<a[^>]+href="([^"]+)"[^>]*class="[^"]*downloadButton', row, re.I)
@@ -703,7 +696,6 @@ def scrape_apkmirror_links(spec, version, arch, density, limit=6):
             if not vpage:
                 continue
                 
-            # On the download page, look for the final download link (a#download-link)
             final_match = re.search(r'<a[^>]+id="download-link"[^>]*href="([^"]+)"', vpage, re.I)
             if not final_match:
                 final_match = re.search(r'<a[^>]+href="([^"]+)"[^>]*id="download-link"', vpage, re.I)
@@ -719,7 +711,6 @@ def scrape_apkmirror_links(spec, version, arch, density, limit=6):
                 
             out = out.replace("&amp;", "&")
             
-            # Extra check using forcebaseapk parameter
             if btype == "APK" and "forcebaseapk=true" not in out and "bundle" in out.lower():
                 continue
             if btype == "BUNDLE" and "forcebaseapk=true" in out:
@@ -809,7 +800,7 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
     if not bundle_only and source == "upload":
         up_tag = (spec.get("upload_tag") or "").strip()
         own_repo = os.environ.get("GITHUB_REPOSITORY", "")
-        if up_tag and own_repo and version == default_version:
+        if up_tag and own_repo:
             asset, tag = find_uploaded_asset(own_repo, up_tag, aid, spec.get("package", ""))
             if asset:
                 print(f"{aid}: using uploaded asset {asset['name']} from release {tag}")
@@ -1188,7 +1179,6 @@ def heal_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles):
     while True:
         ok, applied, failed, missing = run_patch(apk_path, out_apk, gen_data, pb, label, alias, bundles)
         
-        # Strict failure detection: if CLI returned success but output contains FAILED:, force retry
         if ok and failed:
             print(f"CLI returned success but patches failed: {failed}. Dropping and retrying.")
             ok = False
@@ -1343,13 +1333,11 @@ def build_extra_app(app, alias, ks_fp, notes):
             mpp = f"bundles/{aid}_{safe_name(b['label'])}.mpp"
             try:
                 url = b["url"]
-                # Extract repo from URL to download directly from GitHub Release Assets
                 repo_match = re.search(r"github(?:usercontent)?\.com/([^/]+/[^/]+)", url)
                 if repo_match:
                     repo = repo_match.group(1)
                     ver = download_mpp_from_github(repo, mpp)
                 else:
-                    # Fallback for non-GitHub URLs (like Icysymmetra's custom API)
                     ver = download_bundle_from_json(url, mpp)
                     
                 b["_ver"] = ver
@@ -1619,7 +1607,8 @@ def main():
                 target_tag = "unknown"
                 for r in brave_releases:
                     for a in r.get("assets", []):
-                        if a.get("name") == exact_asset:
+                        # CASE-INSENSITIVE COMPARISON FIX
+                        if a.get("name", "").lower() == exact_asset.lower():
                             asset_url = a["browser_download_url"]
                             target_tag = r.get("tag_name", "unknown")
                             break
