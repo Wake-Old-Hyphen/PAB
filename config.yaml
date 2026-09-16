@@ -35,7 +35,7 @@ variants:
     output_name: "Brave-Mono-Stable"
     clone_package: "com.brave.mono"
     app_name: "Brave Mono"
-    exact_asset: "Bravemonoarm64.apk"
+    exact_asset: "BraveMonoarm64.apk"
     exact_patches:
       "Clone app":
         packageName: "com.brave.mono"
@@ -82,12 +82,12 @@ extra_apps:
         - "tik-tok-including-musical-ly"
         - "tik-tok"
         - "tiktok"
-      apkmirror_type: "APK"
+      apkmirror_type: "APK" # CRITICAL FIX: Forces Single APK (nodpi) exactly as patch authors require
     variants:
       - id: "TikTok-HXReborn"
         bundles:
           - url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
-            label: "HXReborn"
+            label: "HXReBorn"
           - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
             label: "Nai64"
             patches:
@@ -274,6 +274,7 @@ extra_apps:
       uptodown_slug: "protonvpn"
       apkmirror_org: "proton-technologies-ag"
       apkmirror_names:
+        - "protonvpn-secure-and-free-vpn" # CRITICAL FIX: Correct slug
         - "protonvpn-fast-secure-vpn"
         - "protonvpn"
       apkmirror_type: "ANY"
