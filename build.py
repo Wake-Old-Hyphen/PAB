@@ -370,6 +370,22 @@ def download_bundle_from_json(url, dest):
     return ver
 
 
+def download_bundle_smart(url, dest):
+    """Prefer the author's patches-bundle.json (respects stable vs dev channel).
+    Fall back to latest GitHub release asset only if the JSON is unavailable/invalid."""
+    try:
+        ver = download_bundle_from_json(url, dest)
+        if os.path.exists(dest) and os.path.getsize(dest) > 100_000 and is_zip(dest):
+            return ver
+        print(f"bundle from {url} invalid; falling back to release assets")
+    except Exception as e:
+        print(f"bundle json failed for {url}: {e}")
+    repo = repo_from_url(url)
+    if repo:
+        return download_mpp_from_github(repo, dest)
+    raise Exception(f"Could not download bundle from {url}")
+
+
 def download_mpp_from_github(repo, dest):
     try:
         rels = requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=10", timeout=60).json()
@@ -383,7 +399,7 @@ def download_mpp_from_github(repo, dest):
                     return r.get("tag_name", "unknown")
     except Exception as e:
         print(f"GitHub release fetch failed for {repo}: {e}")
-    
+
     try:
         j = requests.get(f"https://raw.githubusercontent.com/{repo}/main/patches-bundle.json", timeout=30).json()
         dl = j.get("download_url")
@@ -392,7 +408,24 @@ def download_mpp_from_github(repo, dest):
             return j.get("version", "unknown")
     except Exception as e:
         print(f"patches-bundle.json fallback failed for {repo}: {e}")
-        
+
+    raise Exception(f"Could not find .mpp for {repo}")
+
+
+def download_stable_mpp(repo, dest):
+    """Prefer the latest STABLE release .mpp; fall back to any non-draft release."""
+    rels = get_releases(repo)
+    for prefer_stable in (True, False):
+        for r in rels:
+            if r.get("draft"):
+                continue
+            if prefer_stable and r.get("prerelease"):
+                continue
+            for a in r.get("assets", []):
+                if a.get("name", "").endswith(".mpp"):
+                    print(f"Downloading {a['name']} from {repo} release {r.get('tag_name')}")
+                    download_file(a["browser_download_url"], dest)
+                    return r.get("tag_name", "unknown")
     raise Exception(f"Could not find .mpp for {repo}")
 
 
@@ -465,13 +498,13 @@ def scrape_apkcombo(spec, version, arch):
         html = cf_get(url)
         if not html:
             continue
-            
+
         m = re.search(r'href="(https://download\.apkcombo\.com/[^"]+)"', html, re.I)
         if m:
             dl_url = m.group(1).replace('&amp;', '&')
             print(f"APKCombo link: {dl_url}")
             return dl_url
-            
+
         m = re.search(r'"download_url"\s*:\s*"(https://download\.apkcombo\.com/[^"]+)"', html, re.I)
         if m:
             dl_url = m.group(1).replace('\\u0026', '&').replace('&amp;', '&')
@@ -483,14 +516,14 @@ def scrape_apkcombo(spec, version, arch):
             dl_url = "https://apkcombo.com" + m.group(1).replace('&amp;', '&')
             print(f"APKCombo redirect link: {dl_url}")
             return dl_url
-            
+
         m = re.search(r'data-url="([^"]+)"', html, re.I)
         if m:
             dl_url = m.group(1).replace('&amp;', '&')
             if "download" in dl_url or "apkcombo" in dl_url:
                 print(f"APKCombo data-url: {dl_url}")
                 return dl_url
-                
+
         m = re.search(r'class="[^"]*download[^"]*"[^>]*href="([^"]+)"', html, re.I)
         if m and ("apkcombo.com" in m.group(1) or m.group(1).startswith("/")):
             dl_url = m.group(1)
@@ -655,73 +688,73 @@ def scrape_apkmirror_links(spec, version, arch, density, limit=6):
         page = cf_get(page_url)
         if not page:
             continue
-        
+
         rows = re.split(r'<div[^>]*class="[^"]*table-row[^"]*"[^>]*>', page, flags=re.I)
-        
+
         for row in rows:
             row_text = re.sub(r"<[^>]+>", " ", row).lower()
-            
+
             arch_match = (
-                arch.replace("-", "_") in row_text or 
-                arch in row_text or 
-                "arm64" in row_text or 
-                "universal" in row_text or 
+                arch.replace("-", "_") in row_text or
+                arch in row_text or
+                "arm64" in row_text or
+                "universal" in row_text or
                 "noarch" in row_text
             )
             if not arch_match:
                 continue
-                
+
             is_bundle = "bundle" in row_text and "apkm" in row_text
             is_apk = ("apk" in row_text and not is_bundle) or "forcebaseapk" in row_text
-            
+
             if btype == "APK" and not is_apk:
                 continue
             if btype == "BUNDLE" and not is_bundle:
                 continue
-                
+
             btn_match = re.search(r'<a[^>]+class="[^"]*downloadButton[^"]*"[^>]*href="([^"]+)"', row, re.I)
             if not btn_match:
                 btn_match = re.search(r'<a[^>]+href="([^"]+)"[^>]*class="[^"]*downloadButton', row, re.I)
             if not btn_match:
                 btn_match = re.search(r'href="([^"]*-android-apk-download/[^"]*)"', row, re.I)
-            
+
             if not btn_match:
                 continue
-                
+
             vurl = btn_match.group(1)
             if not vurl.startswith("http"):
                 vurl = base + vurl
-                
+
             vpage = cf_get(vurl)
             if not vpage:
                 continue
-                
+
             final_match = re.search(r'<a[^>]+id="download-link"[^>]*href="([^"]+)"', vpage, re.I)
             if not final_match:
                 final_match = re.search(r'<a[^>]+href="([^"]+)"[^>]*id="download-link"', vpage, re.I)
             if not final_match:
                 final_match = re.search(r'href="([^"]*download\.php\?id=[^"]+)"', vpage, re.I)
-                
+
             if not final_match:
                 continue
-                
+
             out = final_match.group(1)
             if out.startswith("/"):
                 out = base + out
-                
+
             out = out.replace("&amp;", "&")
-            
+
             if btype == "APK" and "forcebaseapk=true" not in out and "bundle" in out.lower():
                 continue
             if btype == "BUNDLE" and "forcebaseapk=true" in out:
                 continue
-                
+
             if out not in results:
                 print(f"APKMirror link ({'BUNDLE' if is_bundle else 'APK'}): {out}")
                 results.append(out)
             if len(results) >= limit:
                 return results
-                
+
     return results
 
 
@@ -734,13 +767,13 @@ def find_uploaded_asset(own_repo, up_tag, aid, pkg, version):
     r = requests.get(f"https://api.github.com/repos/{own_repo}/releases?per_page=100", timeout=60)
     if r.status_code == 200:
         releases.extend(r.json())
-        
+
     seen, uniq = set(), []
     for rel in releases:
         if isinstance(rel, dict) and rel.get("id") not in seen:
             seen.add(rel.get("id"))
             uniq.append(rel)
-            
+
     pkg_lower = (pkg or "").lower()
     ver_lower = (version or "").lower()
 
@@ -757,17 +790,17 @@ def find_uploaded_asset(own_repo, up_tag, aid, pkg, version):
         for a in rel.get("assets", []):
             if ok(a.get("name", "")):
                 candidates.append(a)
-                
+
     if not candidates:
         return None, None
-        
+
     multi_arch = [c for c in candidates if "arm64-v8a" in c["name"] and "armeabi-v7a" in c["name"]]
-    
+
     if multi_arch:
         best = multi_arch[0]
     else:
         best = candidates[0]
-        
+
     tag_name = "unknown"
     for rel in uniq:
         for a in rel.get("assets", []):
@@ -776,7 +809,7 @@ def find_uploaded_asset(own_repo, up_tag, aid, pkg, version):
                 break
         if tag_name != "unknown":
             break
-            
+
     return best, tag_name
 
 
@@ -834,7 +867,13 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
                 except Exception as e:
                     print(f"{aid}: uploaded asset failed: {e}")
 
-    if result[0] is None and source in ("apkeep", "scraper", "upload"):
+    # Upload-only apps NEVER fall back to scrapers or remote bundles:
+    # the curated file is the single source of truth; fail loudly if missing.
+    if source == "upload":
+        RAW_CACHE[key] = result
+        return result
+
+    if result[0] is None and source in ("apkeep", "scraper"):
         raw = f"build/raw_{aid}_{safe_name(version)}_scraper.bin"
         expected_pkg = spec.get("package", "")
 
@@ -881,22 +920,6 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
                 break
             else:
                 print(f"{aid}: {label} result not acceptable (bundle_only={bundle_only})")
-
-    if result[0] is None and source == "scraper":
-        up_tag = (spec.get("upload_tag") or "").strip()
-        own_repo = os.environ.get("GITHUB_REPOSITORY", "")
-        if up_tag and own_repo and version == default_version:
-            asset, tag = find_uploaded_asset(own_repo, up_tag, aid, spec.get("package", ""), version)
-            if asset:
-                print(f"{aid}: scraper failed, falling back to uploaded asset {asset['name']} from release {tag}")
-                raw = f"build/raw_{aid}_{safe_name(version)}_upload_fallback.bin"
-                try:
-                    download_file(asset["browser_download_url"], raw)
-                    k = accept(raw)
-                    if k:
-                        result = (raw, k)
-                except Exception as e:
-                    print(f"{aid}: uploaded fallback asset failed: {e}")
 
     if result[0] is None and source == "apkeep":
         try:
@@ -956,6 +979,11 @@ def prepare_bases(app, aid, version, source, arch, densities, languages, keep_al
     if kind == "bundle":
         res_tuple = save_base(raw, out_apkm, out_single, arch, densities, languages, keep_all_abis)
         res = {"base": res_tuple, "single": False}
+    elif source == "upload":
+        # CRITICAL: trust the curated uploaded file exactly as-is.
+        # A single APK is complete; never swap it for a remote bundle.
+        res_tuple = save_base(raw, out_apkm, out_single, arch, densities, languages, keep_all_abis)
+        res = {"base": res_tuple, "single": True}
     else:
         raw2, kind2 = fetch_raw(app, aid, version, source, bundle_only=True)
         if kind2 == "bundle":
@@ -1167,11 +1195,8 @@ def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles, ke
     for b in bundles:
         cmd += ["-p", b]
     cmd += ["--options-file", opts_path]
-    
-    # CRITICAL FIX: Skip the strict APK version compatibility check.
-    # This allows Hushfeed (which declares 46.2.3) to successfully patch 46.7.3/46.8.3/46.9.3
     cmd += ["--force"]
-    
+
     ks = "signing/keystore.jks"
     if os.path.exists(ks):
         cmd += [
@@ -1180,10 +1205,10 @@ def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles, ke
             "--keystore-entry-alias", alias,
             "--keystore-entry-password", os.environ.get("KEY_PASSWORD", ""),
         ]
-        
+
     if not keep_all_abis:
         cmd += ["--striplibs", "arm64-v8a"]
-        
+
     cmd += ["-o", out_apk, apk_path]
     print("Running:", " ".join(cmd))
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -1208,16 +1233,16 @@ def heal_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles, k
     dropped = []
     while True:
         ok, applied, failed, missing = run_patch(apk_path, out_apk, gen_data, pb, label, alias, bundles, keep_all_abis)
-        
+
         if ok and failed:
             print(f"CLI returned success but patches failed: {failed}. Dropping and retrying.")
             ok = False
-            
+
         if ok:
             return True, applied, dropped, missing
         if not failed:
             return False, applied, dropped, missing
-            
+
         removed = False
         for f in failed:
             fl = f.lower()
@@ -1362,16 +1387,9 @@ def build_extra_app(app, alias, ks_fp, notes):
         for b in v.get("bundles", []):
             mpp = f"bundles/{aid}_{safe_name(b['label'])}.mpp"
             try:
-                url = b["url"]
-                repo_match = re.search(r"github(?:usercontent)?\.com/([^/]+/[^/]+)", url)
-                if repo_match:
-                    repo = repo_match.group(1)
-                    ver = download_mpp_from_github(repo, mpp)
-                else:
-                    ver = download_bundle_from_json(url, mpp)
-                    
+                ver = download_bundle_smart(b["url"], mpp)
                 b["_ver"] = ver
-                b["_status"] = get_release_status(repo_from_url(url), ver)
+                b["_status"] = get_release_status(repo_from_url(b["url"]), ver)
                 mpps.append(mpp)
             except Exception as e:
                 print(f"{v['id']}: bundle failed {b['label']}: {e}")
@@ -1525,31 +1543,22 @@ def main():
     get_latest_cli_jar()
 
     dh6k_tag = "unknown"
-    rels = requests.get("https://api.github.com/repos/dh6k/morphe-patches/releases", timeout=60).json()
-    for r in rels:
-        if r.get("draft"):
-            continue
-        for a in r.get("assets", []):
-            if a.get("name", "").endswith(".mpp"):
-                download_file(a["browser_download_url"], "bundles/dh6k.mpp")
-                dh6k_tag = r.get("tag_name", "unknown")
-                break
-        if os.path.exists("bundles/dh6k.mpp"):
-            break
+    try:
+        dh6k_tag = download_stable_mpp("dh6k/morphe-patches", "bundles/dh6k.mpp")
+    except Exception as e:
+        print(f"dh6k bundle failed: {e}")
 
     official_tag = "unknown"
-    rel = requests.get("https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest", timeout=60).json()
-    for a in rel.get("assets", []):
-        if a.get("name", "").endswith(".mpp"):
-            download_file(a["browser_download_url"], "bundles/official.mpp")
-            official_tag = rel.get("tag_name", "unknown")
-            break
+    try:
+        official_tag = download_stable_mpp("MorpheApp/morphe-patches", "bundles/official.mpp")
+    except Exception as e:
+        print(f"official bundle failed: {e}")
 
     extra_bundles = {}
     for eb in config.get("extra_bundles", []):
         try:
             mpp = f"bundles/{eb['id']}.mpp"
-            ver = download_bundle_from_json(eb["url"], mpp)
+            ver = download_bundle_smart(eb["url"], mpp)
             extra_bundles[eb["id"]] = mpp
             print(f"Extra bundle {eb['id']}: {ver}")
         except Exception as e:
@@ -1639,7 +1648,7 @@ def main():
                 m = re.search(r"/download/(v[^/]+)/", exact_asset_url)
                 if m:
                     target_tag = m.group(1)
-                
+
                 apk_path = f"build/brave_{safe_name(target_tag)}_exact.apk"
                 if not os.path.exists(apk_path):
                     try:
@@ -1648,7 +1657,7 @@ def main():
                         print(f"Could not download exact_asset {exact_asset_url}: {e}")
                         notes.append(f"## {variant['output_name']}\nStatus: Failed (exact_asset download)\n\n")
                         continue
-                
+
                 exact_patches = variant.get("exact_patches", {})
                 if exact_patches:
                     per_bundle = [{} for _ in gen]
@@ -1665,7 +1674,7 @@ def main():
                             if n in brave_base: d[n] = brave_base[n]
                             elif n in auto: d[n] = {}
                         per_bundle.append(d)
-                
+
                 if variant.get("app_name") and n_patch and not any(n_patch in pb for pb in per_bundle):
                     for i, g in enumerate(gen):
                         if n_patch in (g.get("patches") or {}):
@@ -1679,14 +1688,14 @@ def main():
 
                 out = f"build/out_{safe_name(variant['id'])}_{safe_name(target_tag)}.apk"
                 ok, applied, dropped, missing = heal_patch(apk_path, out, gen, per_bundle, variant["id"], alias, bundles)
-                
+
                 final = f"build/{variant['output_name']}-{target_tag}-{dh6k_tag}-patched.apk"
                 if ok and os.path.exists(out):
                     shutil.copyfile(out, final)
                     fp = verify_signature(final, ks_fp)
                 else:
                     fp = None
-                
+
                 note = f"## {variant['output_name']}\n"
                 note += f"Brave version: {target_tag} (Exact Asset URL)\n"
                 note += f"Patch bundles: {dh6k_tag}, official {official_tag}\n"
