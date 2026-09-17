@@ -32,7 +32,7 @@ jobs:
       - name: Use one-time config
         run: |
           if [ ! -f config-onetime.yaml ]; then
-            echo "❌ ERROR: config-onetime.yaml is missing from your repository!"
+            echo "❌ ERROR: config-onetime.yaml is missing from the repository!"
             exit 1
           fi
           cp config-onetime.yaml config.yaml
@@ -43,29 +43,25 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create Release and Upload
+      - name: Create release and upload with retry
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Check if APK actually exists before trying to upload
           if ! ls build/*-patched.apk 1> /dev/null 2>&1; then
             echo "❌ ERROR: build.py did not create any -patched.apk files!"
-            echo "Check the 'Build APK' step logs above to see why it failed."
             exit 1
           fi
-
           TAG="single-tiktok-$(date +%Y%m%d-%H%M%S)"
           gh release create "$TAG" --title "$TAG" --notes-file release_notes.md
-          
-          # Upload with retries to prevent Unicorn timeout errors
           for f in build/*-patched.apk; do
             ok=0
             for i in 1 2 3 4 5; do
               if gh release upload "$TAG" "$f" --clobber; then
                 echo "✅ uploaded $f"; ok=1; break
               fi
-              echo "attempt $i failed, retrying in 20s"; sleep 20
+              echo "attempt $i failed for $f, retrying in 20s"; sleep 20
             done
             [ "$ok" = "1" ] || exit 1
           done
