@@ -13,8 +13,8 @@ extra_apps:
       package: "com.zhiliaoapp.musically"
       upload_tag: "stock-tiktok-apk"
     variants:
-      - id: "TikTok-46.9.3-Hushfeed"
-        apk_version: "46.9.3"
+      - id: "TikTok-46.2.3-Hushfeed"
+        apk_version: "46.2.3"
         bundles:
           - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
             label: "Hushfeed"
