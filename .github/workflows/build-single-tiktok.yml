@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,61 +24,42 @@ jobs:
       - name: Install Python dependencies
         run: pip install requests pyyaml beautifulsoup4 curl_cffi
 
-      # Keep the SAME secret names your main workflow uses
       - name: Decode keystore
         run: |
           mkdir -p signing
           echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > signing/keystore.jks
 
-      # Swap in the one-time config (runner-only, never committed)
       - name: Use one-time config
-        run: cp config-onetime.yaml config.yaml
+        run: |
+          if [ ! -f config-onetime.yaml ]; then
+            echo "❌ ERROR: config-onetime.yaml is missing from your repository!"
+            exit 1
+          fi
+          cp config-onetime.yaml config.yaml
 
-      - name: Build APKs
+      - name: Build APK
         run: python build.py
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
 
-      # Safety net: APK is always retrievable even if publishing fails
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: single-tiktok-apk
-          path: build/*-patched.apk
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload notes artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: single-tiktok-notes
-          path: release_notes.md
-          retention-days: 7
-
-  publish:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: single-tiktok-apk
-          path: dist
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: single-tiktok-notes
-          path: notes
-
-      # Single file upload with retries = no Unicorn crashes
-      - name: Create release and upload with retry
+      - name: Create Release and Upload
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Check if APK actually exists before trying to upload
+          if ! ls build/*-patched.apk 1> /dev/null 2>&1; then
+            echo "❌ ERROR: build.py did not create any -patched.apk files!"
+            echo "Check the 'Build APK' step logs above to see why it failed."
+            exit 1
+          fi
+
           TAG="single-tiktok-$(date +%Y%m%d-%H%M%S)"
-          gh release create "$TAG" --title "$TAG" --notes-file notes/release_notes.md
-          for f in dist/*.apk; do
+          gh release create "$TAG" --title "$TAG" --notes-file release_notes.md
+          
+          # Upload with retries to prevent Unicorn timeout errors
+          for f in build/*-patched.apk; do
             ok=0
             for i in 1 2 3 4 5; do
               if gh release upload "$TAG" "$f" --clobber; then
