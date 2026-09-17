@@ -37,18 +37,15 @@ variants:
     app_name: "Brave Mono"
     exact_asset_url: "https://github.com/brave/brave-browser/releases/download/v1.95.101/Bravemonoarm64.apk"
     exact_patches:
-      # dh6k (3)
       "Change app icon":
         customIcon: "assets/isoamoledbraveicon.png"
       "Change app name":
         appName: "Brave Mono"
       "Disable analytics": {}
-      # official Morphe (1)
       "Clone app":
         packageName: "com.brave.mono"
         updatePermissions: true
         updateProviders: true
-      # kveld9 (13)
       "APK Junk Cleaner": {}
       "Block Brave Telemetry": {}
       "Brave In-Product & Commercial Notification Optimizer": {}
@@ -146,6 +143,53 @@ extra_apps:
             label: "Nai64"
             patches:
               - "Empty Clipboard Report"
+
+      - id: "TikTok-46.9.3-Kveld9-Custom"
+        apk_version: "46.9.3"
+        bundles:
+          - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
+            label: "Kveld9"
+            patches:
+              - "APK Junk Cleaner"
+              - "Bypass Mandatory Login"
+              - "Clean Share URL"
+              - "Client-Side AI & Behavioral Profiling Governor"
+              - "Core Asset De-bloat"
+              - "DPI Resource Slimmer"
+              - "Device Privacy Guard"
+              - "Disable Push Notifications"
+              - "Feed Ad Blocker"
+              - "Feed Bloat & Distraction Blocker"
+              - "Feed Live Stream Blocker"
+              - "Hide TikTok Shop & Mall"
+              - "In-App Browser Privacy Guard"
+              - "Instant Launch & Splash Blocker"
+              - "Language Pack Purger"
+              - "Live Stream 3D Gift Optimizer"
+              - "Live Stream SDK & Minigame De-bloat"
+              - "Locale Resource Slimmer"
+              - "Media Usability & Watermark-Free Downloader"
+              - "P2P Video Relay & Mesh CDN Blocker"
+              - "PNG Asset Optimizer"
+              - "Playback Speed Persistence"
+              - "Resource & Battery Governor"
+              - "SIM Region Selector"
+              - "Skip First-Launch Onboarding"
+              - "Studio & Creation De-bloat"
+              - "Unified Telemetry & Tracker Silencer"
+              - "Update Prompt Suppressor"
+              - "Video Quality Governor"
+        options:
+          "DPI Resource Slimmer":
+            dpi: "xxhdpi"
+          "Language Pack Purger":
+            languages: "en"
+          "Locale Resource Slimmer":
+            locales: "en"
+          "SIM Region Selector":
+            region: "CH"
+          "Video Quality Governor":
+            resolution: "1080"
 
   - id: youtube
     output_base: "YouTube"
@@ -262,7 +306,7 @@ extra_apps:
       - id: "ProtonMail-Patched"
         bundles:
           - url: "https://raw.githubusercontent.com/hxreborn/morphe-patches/main/patches-bundle.json"
-            label: "HXReborn"
+            label: "HXReBorn"
 
   - id: protonvpn
     output_base: "ProtonVPN"
