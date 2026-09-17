@@ -4,6 +4,7 @@ import io
 import json
 import yaml
 import copy
+import glob
 import stat
 import shutil
 import tarfile
@@ -50,6 +51,15 @@ UA = {
 
 RAW_CACHE = {}
 BASE_CACHE = {}
+
+
+def gh_api_get(url, timeout=60):
+    """GitHub API GET with optional token auth (avoids runner rate limits)."""
+    headers = dict(UA)
+    tok = os.environ.get("GITHUB_TOKEN", "")
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    return requests.get(url, timeout=timeout, headers=headers)
 
 
 def parse_ver(tag):
@@ -156,7 +166,7 @@ def ensure_apkeep():
         os.chmod(path, 0o755)
         return path
 
-    rel = requests.get("https://api.github.com/repos/EFForg/apkeep/releases/latest", timeout=60).json()
+    rel = gh_api_get("https://api.github.com/repos/EFForg/apkeep/releases/latest").json()
     assets = rel.get("assets", [])
     print("apkeep release assets:", [a.get("name") for a in assets])
 
@@ -323,13 +333,13 @@ def save_base(raw, out_apkm, out_single, arch, densities, languages, keep_all_ab
 
 
 def get_releases(repo):
-    r = requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=100", timeout=60)
+    r = gh_api_get(f"https://api.github.com/repos/{repo}/releases?per_page=100")
     r.raise_for_status()
     return r.json()
 
 
 def get_latest_stable(repo):
-    r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", timeout=60)
+    r = gh_api_get(f"https://api.github.com/repos/{repo}/releases/latest")
     r.raise_for_status()
     return r.json()
 
@@ -388,7 +398,7 @@ def download_bundle_smart(url, dest):
 
 def download_mpp_from_github(repo, dest):
     try:
-        rels = requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=10", timeout=60).json()
+        rels = gh_api_get(f"https://api.github.com/repos/{repo}/releases?per_page=10").json()
         for r in rels:
             if r.get("draft"):
                 continue
@@ -761,10 +771,10 @@ def scrape_apkmirror_links(spec, version, arch, density, limit=6):
 def find_uploaded_asset(own_repo, up_tag, aid, pkg, version):
     releases = []
     if up_tag:
-        r = requests.get(f"https://api.github.com/repos/{own_repo}/releases/tags/{up_tag}", timeout=60)
+        r = gh_api_get(f"https://api.github.com/repos/{own_repo}/releases/tags/{up_tag}")
         if r.status_code == 200:
             releases.append(r.json())
-    r = requests.get(f"https://api.github.com/repos/{own_repo}/releases?per_page=100", timeout=60)
+    r = gh_api_get(f"https://api.github.com/repos/{own_repo}/releases?per_page=100")
     if r.status_code == 200:
         releases.extend(r.json())
 
@@ -817,7 +827,7 @@ def download_github_release_apk(spec, dest):
     repo = spec["repo"]
     tag = spec["tag"]
     match = (spec.get("match") or "").lower()
-    rel = requests.get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}", timeout=60).json()
+    rel = gh_api_get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}").json()
     assets = rel.get("assets", [])
     chosen = None
     if match:
@@ -1345,7 +1355,7 @@ def find_working_brave_version(cands, per_bundle, gen_data, alias, cache, label,
 
 
 def get_latest_cli_jar():
-    rel = requests.get("https://api.github.com/repos/MorpheApp/morphe-desktop/releases/latest", timeout=60).json()
+    rel = gh_api_get("https://api.github.com/repos/MorpheApp/morphe-desktop/releases/latest").json()
     for a in rel.get("assets", []):
         if a.get("name", "").endswith("-all.jar"):
             download_file(a["browser_download_url"], "build/cli.jar")
@@ -1513,7 +1523,7 @@ def build_extra_app(app, alias, ks_fp, notes):
 
 def download_monochrome_from_kveld9(dest):
     try:
-        rel = requests.get("https://api.github.com/repos/kveld9/kveld-morphe-patches/releases/latest", timeout=60).json()
+        rel = gh_api_get("https://api.github.com/repos/kveld9/kveld-morphe-patches/releases/latest").json()
         for a in rel.get("assets", []):
             n = a.get("name", "").lower()
             if "mono" in n and n.endswith(".apk"):
@@ -1772,6 +1782,15 @@ def main():
 
     with open("release_notes.md", "w") as f:
         f.write("# Morphe AutoBuilds Release\n\n" + "".join(notes))
+
+    # CRITICAL: fail loudly if nothing was built, printing the internal status log
+    if not glob.glob("build/*-patched.apk"):
+        print("\n" + "=" * 60)
+        print("❌ FATAL: No patched APKs were generated!")
+        print("Internal status log:")
+        print("".join(notes))
+        print("=" * 60 + "\n")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
