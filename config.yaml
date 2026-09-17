@@ -37,23 +37,30 @@ variants:
     app_name: "Brave Mono"
     exact_asset_url: "https://github.com/brave/brave-browser/releases/download/v1.95.101/Bravemonoarm64.apk"
     exact_patches:
+      # dh6k (3)
+      "Change app icon":
+        customIcon: "assets/isoamoledbraveicon.png"
+      "Change app name":
+        appName: "Brave Mono"
+      "Disable analytics": {}
+      # official Morphe (1)
       "Clone app":
         packageName: "com.brave.mono"
         updatePermissions: true
         updateProviders: true
-      "Change app icon":
-        customIcon: "assets/isoamoledbraveicon.png"
-      "Disable analytics": {}
-      "Change app name":
-        appName: "Brave Mono"
+      # kveld9 (13)
+      "APK Junk Cleaner": {}
       "Block Brave Telemetry": {}
       "Brave In-Product & Commercial Notification Optimizer": {}
       "Brave Origin": {}
       "Brave Startup Performance Optimization": {}
+      "DPI Resource Slimmer": {}
       "Disable Background Sync & Periodic Sync": {}
       "Disable Battery Status API & OS Listener": {}
       "Locale PAK Slimmer": {}
+      "Locale Resource Slimmer": {}
       "Native Bloat Slimmer": {}
+      "PNG Asset Optimizer": {}
       "Skip First Run": {}
     bundles:
       - "dh6k"
