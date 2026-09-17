@@ -1,0 +1,25 @@
+auto_include_new_patches: true
+exclude_patches: []
+
+# Must exist (empty) so build.py doesn't error on Brave section
+variants: []
+
+extra_apps:
+  - id: tiktok
+    output_base: "TikTok"
+    density: ["nodpi"]
+    languages: ["en"]
+    apk:
+      source: "upload"
+      package: "com.zhiliaoapp.musically"
+      upload_tag: "stock-tiktok-apk"
+    variants:
+      - id: "TikTok-46.9.3-Hushfeed"
+        apk_version: "46.9.3"
+        bundles:
+          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
+            label: "Hushfeed"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+            label: "Nai64"
+            patches:
+              - "Empty Clipboard Report"
