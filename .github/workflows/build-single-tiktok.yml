@@ -24,10 +24,23 @@ jobs:
       - name: Install Python dependencies
         run: pip install requests pyyaml beautifulsoup4 curl_cffi
 
+      # ⚠️ Replace KEYSTORE_B64 below with the EXACT secret name your MAIN workflow uses
       - name: Decode keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
         run: |
           mkdir -p signing
-          echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > signing/keystore.jks
+          if [ -z "${KEYSTORE_B64}" ]; then
+            echo "❌ ERROR: keystore secret is EMPTY or MISSING! Fix the secret name in this step."
+            exit 1
+          fi
+          echo "${KEYSTORE_B64}" | base64 -d > signing/keystore.jks
+          SIZE=$(stat -c%s signing/keystore.jks)
+          echo "keystore.jks size: ${SIZE} bytes"
+          if [ "${SIZE}" -lt 100 ]; then
+            echo "❌ ERROR: keystore.jks too small (${SIZE} bytes) — decode failed!"
+            exit 1
+          fi
 
       - name: Use one-time config
         run: |
