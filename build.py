@@ -113,7 +113,7 @@ def ensure_apkeep():
         return path
     rel = gh_api_get("https://api.github.com/repos/EFForg/apkeep/releases/latest").json()
 
-    # ✅ FIXED: prefer the standard Linux GNU binary, NOT the Android binary
+    # FIXED: prefer the standard Linux GNU binary, NOT the Android binary
     chosen = next((a for a in rel.get("assets", []) if "unknown-linux-gnu" in a.get("name", "").lower() and "x86_64" in a.get("name", "").lower() and not a.get("name", "").endswith((".deb", ".rpm", ".sig"))), None)
     if not chosen:
         chosen = next((a for a in rel.get("assets", []) if "linux" in a.get("name", "").lower() and "x86_64" in a.get("name", "").lower() and not a.get("name", "").endswith((".deb", ".rpm", ".sig"))), None)
@@ -805,7 +805,7 @@ def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles, ke
     cmd += ["-o", out_apk, apk_path]
     r = subprocess.run(cmd, capture_output=True, text=True)
 
-    # ✅ NEW: capture the real app version reported by the CLI (fixes "latest" in filenames)
+    # Capture the real app version reported by the CLI (fixes "latest" in filenames)
     m = re.search(r"Filtering patches for\s+[\w.]+\s+v([0-9][0-9A-Za-z_\-]*(?:\.[0-9A-Za-z_\-]+)*)", r.stdout or "")
     if m:
         DETECTED_VERSIONS[label] = m.group(1)
@@ -969,7 +969,7 @@ def build_extra_app(app, alias, ks_fp, notes):
         out = f"build/out_{safe_name(vid)}.apk"
         ok, applied, dropped, missing = heal_patch(bp, out, gen, per_bundle, vid, alias, mpps, keep_all_abis)
 
-        # ✅ NEW: resolve the real version for apps fetched as "latest" (apkeep / scrapers)
+        # Resolve the real version for apps fetched as "latest" (apkeep / scrapers)
         if (not ver) or ver.lower() == "latest":
             ver = DETECTED_VERSIONS.get(vid, ver)
 
@@ -989,6 +989,104 @@ def build_extra_app(app, alias, ks_fp, notes):
         else: notes.append(f"## {vid}\nStatus: Failed\n\n")
 
 def main():
+    # ==========================================
+    # 🚀 CUSTOM BUILD MODE (Web Form Override) 🚀
+    # ==========================================
+    if os.environ.get("CUSTOM_BUILD"):
+        print("🚀 RUNNING IN CUSTOM BUILD MODE 🚀")
+        app_id = os.environ.get("CUSTOM_APP", "custom")
+        pkg = os.environ.get("CUSTOM_PKG", "").strip()
+        
+        default_pkgs = {
+            "tiktok": "com.zhiliaoapp.musically", "youtube": "com.google.android.youtube",
+            "ytmusic": "com.google.android.apps.youtube.music", "google": "com.google.android.googlequicksearchbox",
+            "gemini": "com.google.android.apps.bard", "windscribe": "com.windscribe.vpn",
+            "protonmail": "ch.protonmail.android", "protonvpn": "ch.protonvpn.android", "brave": "com.brave.browser"
+        }
+        if not pkg: pkg = default_pkgs.get(app_id, f"com.custom.{app_id}")
+
+        ver = os.environ.get("CUSTOM_VER", "latest").strip()
+        source_choice = os.environ.get("CUSTOM_SOURCE", "auto").strip()
+        
+        # Resolve 'auto' logic
+        upload_first_apps = ["tiktok", "youtube", "ytmusic", "google", "gemini"]
+        source = "upload" if (source_choice == "auto" and app_id in upload_first_apps) else ("apkeep" if source_choice == "auto" else source_choice)
+
+        # Parse bundles
+        bundle_urls = [u.strip() for u in os.environ.get("CUSTOM_BUNDLES", "").split(",") if u.strip()]
+        bundles_cfg = []
+        include_patches = [p.strip() for p in os.environ.get("CUSTOM_INCLUDE", "").split(",") if p.strip()]
+        
+        for i, url in enumerate(bundle_urls):
+            repo = repo_from_url(url)
+            label = repo.split("/")[-1].replace("-patches", "").replace("-morphe", "").replace("revanced-", "").title() if repo else f"Bundle{i}"
+            b_cfg = {"url": url, "label": label}
+            if include_patches: b_cfg["patches"] = include_patches
+            bundles_cfg.append(b_cfg)
+
+        # Parse options (Format: PatchName.key=value)
+        options_cfg = {}
+        for line in os.environ.get("CUSTOM_OPTIONS", "").splitlines():
+            line = line.strip()
+            if not line or "=" not in line: continue
+            patch_key, val = line.split("=", 1)
+            patch_name, opt_key = patch_key.rsplit(".", 1) if "." in patch_key else (patch_key, "value")
+            options_cfg.setdefault(patch_name.strip(), {})[opt_key.strip()] = val.strip()
+
+        exclude_patches = [p.strip() for p in os.environ.get("CUSTOM_EXCLUDE", "").split(",") if p.strip()]
+        clone_pkg = os.environ.get("CUSTOM_CLONE", "").strip()
+        app_name = os.environ.get("CUSTOM_NAME", "").strip()
+        abi = os.environ.get("CUSTOM_ABI", "arm64-v8a").strip()
+        
+        keep_all_abis = (abi == "all")
+        arch = "armeabi-v7a" if abi == "armeabi-v7a" else "arm64-v8a"
+
+        # Generate dynamic config
+        config = {
+            "auto_include_new_patches": False,
+            "exclude_patches": [],
+            "extra_apps": [{
+                "id": app_id, "output_base": app_id.title(), "density": ["nodpi", "xxhdpi"], "languages": ["en"],
+                "keep_all_abis": keep_all_abis,
+                "apk": {"source": source, "package": pkg, "arch": arch, "upload_tag": "stock-tiktok-apk"},
+                "variants": [{
+                    "id": f"Custom-{app_id.title()}", "apk_version": ver, "clone_package": clone_pkg,
+                    "app_name": app_name, "exclude_patches": exclude_patches,
+                    "bundles": bundles_cfg, "options": options_cfg
+                }]
+            }]
+        }
+
+        # Run the exact same engine
+        if os.path.exists("build"): shutil.rmtree("build")
+        if os.path.exists("bundles"): shutil.rmtree("bundles")
+        os.makedirs("build")
+        os.makedirs("bundles")
+        
+        alias = detect_alias()
+        ks_fp = keystore_fingerprint(alias)
+        get_latest_cli_jar()
+
+        notes = []
+        for app in config.get("extra_apps", []):
+            build_extra_app(app, alias, ks_fp, notes)
+
+        with open("release_notes.md", "w") as f:
+            f.write("# Custom Build Release\n\n" + "".join(notes))
+
+        if not glob.glob("build/*-patched.apk"):
+            print("\n" + "=" * 60)
+            print("❌ FATAL: Custom build failed to produce an APK!")
+            print("".join(notes))
+            print("=" * 60 + "\n")
+            raise SystemExit(1)
+
+        print("✅ Custom build successful!")
+        return # Exit main early, skip batch logic
+    # ==========================================
+    # 📦 STANDARD BATCH MODE (config.yaml) 📦
+    # ==========================================
+    
     with open("config.yaml", "r") as f: config = yaml.safe_load(f)
     if os.path.exists("build"): shutil.rmtree("build")
     if os.path.exists("bundles"): shutil.rmtree("bundles")
