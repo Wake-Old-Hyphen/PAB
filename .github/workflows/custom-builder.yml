@@ -1,0 +1,150 @@
+name: Custom Builder (Ad-Hoc)
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: 'App to build'
+        required: true
+        type: choice
+        options:
+          - tiktok
+          - youtube
+          - ytmusic
+          - google
+          - gemini
+          - windscribe
+          - protonmail
+          - protonvpn
+          - brave
+      package_name:
+        description: 'Package Name (Leave blank to use default for selected app)'
+        required: false
+        type: string
+      version:
+        description: 'App Version (e.g., 46.9.3 or latest)'
+        required: true
+        default: 'latest'
+        type: string
+      source:
+        description: 'APK Source'
+        required: true
+        type: choice
+        options:
+          - auto
+          - upload
+          - apkeep
+      bundle_urls:
+        description: 'Bundle URLs (Comma-separated RAW githubusercontent links)'
+        required: true
+        type: string
+      include_patches:
+        description: 'Patches to INCLUDE (Comma-separated. Leave blank for ALL)'
+        required: false
+        type: string
+      exclude_patches:
+        description: 'Patches to EXCLUDE (Comma-separated)'
+        required: false
+        type: string
+      patch_options:
+        description: 'Patch Options (One per line, format: PatchName.key=value)'
+        required: false
+        type: string
+      clone_package:
+        description: 'Clone Package Name (Optional)'
+        required: false
+        type: string
+      app_name:
+        description: 'Custom App Name (Optional)'
+        required: false
+        type: string
+      abi:
+        description: 'CPU Architecture'
+        required: true
+        type: choice
+        options:
+          - arm64-v8a
+          - armeabi-v7a
+          - all
+
+permissions:
+  contents: write
+
+jobs:
+  custom-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install requests pyyaml beautifulsoup4 curl_cffi
+
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p signing
+          if [ -z "${KEYSTORE_BASE64}" ]; then
+            echo "❌ ERROR: KEYSTORE_BASE64 secret is EMPTY or MISSING!"
+            exit 1
+          fi
+          echo "${KEYSTORE_BASE64}" | base64 -d > signing/keystore.jks
+          SIZE=$(stat -c%s signing/keystore.jks)
+          if [ "${SIZE}" -lt 100 ]; then
+            echo "❌ ERROR: keystore.jks too small (${SIZE} bytes)!"
+            exit 1
+          fi
+
+      - name: Build Custom APK
+        run: python build.py
+        env:
+          # Pass all form inputs to build.py
+          CUSTOM_BUILD: "true"
+          CUSTOM_APP: ${{ inputs.app }}
+          CUSTOM_PKG: ${{ inputs.package_name }}
+          CUSTOM_VER: ${{ inputs.version }}
+          CUSTOM_SOURCE: ${{ inputs.source }}
+          CUSTOM_BUNDLES: ${{ inputs.bundle_urls }}
+          CUSTOM_INCLUDE: ${{ inputs.include_patches }}
+          CUSTOM_EXCLUDE: ${{ inputs.exclude_patches }}
+          CUSTOM_OPTIONS: ${{ inputs.patch_options }}
+          CUSTOM_CLONE: ${{ inputs.clone_package }}
+          CUSTOM_NAME: ${{ inputs.app_name }}
+          CUSTOM_ABI: ${{ inputs.abi }}
+          
+          # Standard secrets
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release and upload with retry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! ls build/*-patched.apk 1> /dev/null 2>&1; then
+            echo "❌ ERROR: build.py did not create any -patched.apk files!"
+            exit 1
+          fi
+          TAG="custom-${{ inputs.app }}-$(date +%Y%m%d-%H%M%S)"
+          gh release create "$TAG" --title "Custom Build: ${{ inputs.app }} ($TAG)" --notes-file release_notes.md --prerelease
+          
+          for f in build/*-patched.apk; do
+            ok=0
+            for i in 1 2 3 4 5; do
+              if gh release upload "$TAG" "$f" --clobber; then
+                echo "✅ uploaded $f"; ok=1; break
+              fi
+              echo "attempt $i failed for $f, retrying in 20s"; sleep 20
+            done
+            [ "$ok" = "1" ] || exit 1
+          done
