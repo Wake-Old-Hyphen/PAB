@@ -306,7 +306,7 @@ extra_apps:
       - id: "ProtonMail-Patched"
         bundles:
           - url: "https://raw.githubusercontent.com/hxreborn/morphe-patches/main/patches-bundle.json"
-            label: "HXReborn"
+            label: "HXReBorn"
 
   - id: protonvpn
     output_base: "ProtonVPN"
