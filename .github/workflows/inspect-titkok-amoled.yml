@@ -43,18 +43,22 @@ jobs:
 
             echo "::group::TikTok $v"
 
-            # Use jq's contains() and endswith() to cleanly match the exact filename
-            # without fighting bash regex escaping.
+            # 1. Use jq to just print "filename url" on each line
+            # 2. Use grep to find the exact version and ensure it ends in .apk
+            # 3. Use awk to grab the second column (the URL)
             url="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/stock-tiktok-apk" \
-              -q '.assets[] | select(.name | contains("com.zhiliaoapp.musically_'"$v"'") and (.name | endswith(".apk"))) | .browser_download_url' \
-              | head -n1 || true)"
+              --jq '.assets[] | "\(.name) \(.browser_download_url)"' \
+              | grep "com.zhiliaoapp.musically_${v}" \
+              | grep "\.apk$" \
+              | head -n1 \
+              | awk '{print $2}' || true)"
 
             if [ -z "$url" ]; then
               echo "::error::No uploaded stock APK for $v"
               exit 1
             fi
 
-            echo "Downloading TikTok $v from $url ..."
+            echo "Downloading TikTok $v..."
             curl -L -H "Authorization: Bearer ${GH_TOKEN}" -o "work/base_${v}.apk" "$url"
 
             # -s = do not decode source/smali, only decode resources.
