@@ -1,0 +1,119 @@
+name: Inspect TikTok AMOLED resources
+
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: "Comma-separated stock TikTok versions"
+        default: "46.2.3,46.9.3"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          curl -L -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar
+
+      - name: Download and decode stock APKs
+        run: |
+          set -euo pipefail
+
+          IFS=',' read -ra versions <<< "${{ github.event.inputs.versions }}"
+          mkdir -p work
+
+          for v in "${versions[@]}"; do
+            v="$(echo "$v" | tr -d '[:space:]')"
+            [ -n "$v" ] || continue
+
+            echo "::group::TikTok $v"
+
+            rx="com\\.zhiliaoapp\\.musically_${v//./\\.}.*apkmirror\\.com\\.apk"
+
+            url="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/stock-tiktok-apk" \
+              --arg rx "$rx" \
+              --jq '.assets[] | select(.name | test($rx)) | .browser_download_url' \
+              | head -n1 || true)"
+
+            if [ -z "$url" ]; then
+              echo "::error::No uploaded stock APK for $v"
+              exit 1
+            fi
+
+            curl -L -H "Authorization: Bearer ${GH_TOKEN}" -o "work/base_${v}.apk" "$url"
+
+            # -s = do not decode source/smali, only decode resources.
+            java -Xmx4g -jar apktool.jar d -s -f -o "work/decoded_${v}" "work/base_${v}.apk"
+
+            echo "::endgroup::"
+          done
+
+      - name: Build AMOLED candidate report
+        run: |
+          set -euo pipefail
+
+          IFS=',' read -ra versions <<< "${{ github.event.inputs.versions }}"
+          report="amoled-resource-report.txt"
+          : > "$report"
+
+          for v in "${versions[@]}"; do
+            v="$(echo "$v" | tr -d '[:space:]')"
+            [ -n "$v" ] || continue
+
+            d="work/decoded_${v}"
+
+            {
+              echo "# TikTok $v AMOLED candidates"
+              echo
+
+              echo "## Known Hushfeed 46.2.3 background colors"
+              for id in a3y a40 a41 a43 a4a; do
+                grep -R -n "<color name=\"$id\"" "$d"/res/values* || true
+              done
+
+              echo
+              echo "## Known Hushfeed sheet style items"
+              for id in agk c3; do
+                grep -R -n "<item name=\"$id\"" "$d"/res/values* || true
+              done
+
+              echo
+              echo "## Common dark color resources"
+              grep -R -nE '<color name="[^"]+">#([fF][fF])?(000000|0[0-9a-fA-F]{5}|1[0-9a-fA-F]{5}|2[0-9a-fA-F]{5}|3[0-9a-fA-F]{5}|404040)</color>' \
+                "$d"/res/values* | head -n 2000 || true
+
+              echo
+              echo "## Layout background references, first 2000"
+              grep -R -nE 'android:background="@(color|drawable|style)/[^"]+"' \
+                "$d"/res/layout* | head -n 2000 || true
+
+              echo
+              echo "## Drawable solid color references, first 1000"
+              grep -R -nE '<solid android:color="@(color|style)/[^"]+"' \
+                "$d"/res/drawable* | head -n 1000 || true
+
+              echo
+              echo
+            } >> "$report"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amoled-resource-report
+          path: amoled-resource-report.txt
+          retention-days: 14
