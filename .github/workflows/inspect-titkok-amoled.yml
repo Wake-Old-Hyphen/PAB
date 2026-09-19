@@ -43,11 +43,10 @@ jobs:
 
             echo "::group::TikTok $v"
 
-            rx="com\\.zhiliaoapp\\.musically_${v//./\\.}.*apkmirror\\.com\\.apk"
-
+            # Use jq's contains() and endswith() to cleanly match the exact filename
+            # without fighting bash regex escaping.
             url="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/stock-tiktok-apk" \
-              --arg rx "$rx" \
-              --jq '.assets[] | select(.name | test($rx)) | .browser_download_url' \
+              -q '.assets[] | select(.name | contains("com.zhiliaoapp.musically_'"$v"'") and (.name | endswith(".apk"))) | .browser_download_url' \
               | head -n1 || true)"
 
             if [ -z "$url" ]; then
@@ -55,6 +54,7 @@ jobs:
               exit 1
             fi
 
+            echo "Downloading TikTok $v from $url ..."
             curl -L -H "Authorization: Bearer ${GH_TOKEN}" -o "work/base_${v}.apk" "$url"
 
             # -s = do not decode source/smali, only decode resources.
