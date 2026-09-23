@@ -57,6 +57,7 @@ def parse_ver(tag):
 
 def norm_key(s): return re.sub(r"[^a-z0-9]", "", (s or "").lower())
 def safe_name(s): return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(s))
+def clean_name(p): return re.sub(r"\s+", " ", (p or "")).strip()
 
 def is_zip(path):
     try:
@@ -112,13 +113,11 @@ def ensure_apkeep():
         os.chmod(path, 0o755)
         return path
     rel = gh_api_get("https://api.github.com/repos/EFForg/apkeep/releases/latest").json()
-
     # FIXED: prefer the standard Linux GNU binary, NOT the Android binary
     chosen = next((a for a in rel.get("assets", []) if "unknown-linux-gnu" in a.get("name", "").lower() and "x86_64" in a.get("name", "").lower() and not a.get("name", "").endswith((".deb", ".rpm", ".sig"))), None)
     if not chosen:
         chosen = next((a for a in rel.get("assets", []) if "linux" in a.get("name", "").lower() and "x86_64" in a.get("name", "").lower() and not a.get("name", "").endswith((".deb", ".rpm", ".sig"))), None)
     if not chosen: raise Exception("Could not find Linux apkeep release asset")
-
     raw = "build/apkeep_download"
     download_file(chosen["browser_download_url"], raw)
     extracted = False
@@ -229,6 +228,17 @@ def repo_from_url(url):
         if m: return m.group(1)
     return None
 
+def normalize_bundle_url(url):
+    """Accept plain repo links and /blob/ links; convert to raw patches-bundle.json."""
+    u = (url or "").strip()
+    m = re.match(r"^https?://(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", u)
+    if m:
+        return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/main/patches-bundle.json"
+    m = re.match(r"^https?://(?:www\.)?github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+?)/?$", u)
+    if m:
+        return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/{m.group(3)}/{m.group(4)}"
+    return u
+
 def download_bundle_from_json(url, dest):
     j = requests.get(url, timeout=120).json()
     dl = j.get("download_url")
@@ -274,6 +284,14 @@ def download_stable_mpp(repo, dest):
                     download_file(a["browser_download_url"], dest)
                     return r.get("tag_name", "unknown")
     raise Exception(f"Could not find .mpp for {repo}")
+
+def download_pinned_mpp(repo, tag, dest):
+    rel = gh_api_get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}").json()
+    for a in rel.get("assets", []):
+        if a.get("name", "").endswith(".mpp"):
+            download_file(a["browser_download_url"], dest)
+            return tag
+    raise Exception(f"No .mpp asset in {repo} release {tag}")
 
 def find_uploaded_asset(own_repo, up_tag, aid, pkg, version):
     releases = []
@@ -709,14 +727,34 @@ def enable_entry(entry, vals):
             elif "package" in kl and "update" not in kl: set_option_value(entry["options"], k, pkg)
 
 def make_variant_options(gen_data, per_bundle):
+    """Enable exactly the wanted patches; tolerate whitespace/case differences and
+    fall back to a unique substring match so small typos never silently vanish."""
     data = copy.deepcopy(gen_data)
-    found, all_wanted = set(), set()
+    found = set()
+    all_wanted = set()
     for i, bundle in enumerate(data):
         wanted = per_bundle[i] if i < len(per_bundle) else {}
         all_wanted |= set(wanted)
-        for name, entry in (bundle.get("patches") or {}).items():
-            if name in wanted: found.add(name); enable_entry(entry, wanted[name])
-            else: entry["enabled"] = False
+        entries = bundle.get("patches") or {}
+        lookup = {}
+        for real in entries:
+            lookup.setdefault(clean_name(real).lower(), real)
+        resolved = {}
+        for wname, wvals in wanted.items():
+            key = clean_name(wname).lower()
+            real = lookup.get(key)
+            if real is None:
+                cands = sorted({r for k, r in lookup.items() if key in k or k in key})
+                if len(cands) == 1:
+                    real = cands[0]
+            if real is not None:
+                resolved[real] = wvals
+                found.add(wname)
+        for name, entry in entries.items():
+            if name in resolved:
+                enable_entry(entry, resolved[name])
+            else:
+                entry["enabled"] = False
     return data, sorted(all_wanted - found)
 
 def needs_value_names(gen_data):
@@ -912,9 +950,12 @@ def build_extra_app(app, alias, ks_fp, notes):
         for b in v.get("bundles", []):
             mpp = f"bundles/{aid}_{safe_name(b['label'])}.mpp"
             try:
-                ver = download_bundle_smart(b["url"], mpp)
+                if b.get("pin"):
+                    ver = download_pinned_mpp(repo_from_url(normalize_bundle_url(b["url"])), b["pin"], mpp)
+                else:
+                    ver = download_bundle_smart(normalize_bundle_url(b["url"]), mpp)
                 b["_ver"] = ver
-                b["_status"] = get_release_status(repo_from_url(b["url"]), ver)
+                b["_status"] = get_release_status(repo_from_url(normalize_bundle_url(b["url"])), ver)
                 mpps.append(mpp)
             except Exception as e: ok = False; break
         v["_ok"] = ok
@@ -934,24 +975,24 @@ def build_extra_app(app, alias, ks_fp, notes):
         for i, g in enumerate(gen):
             bundle_cfg = v.get("bundles", [])[i] if i < len(v.get("bundles", [])) else {}
             allow = bundle_cfg.get("patches")
-            allow_l = {x.lower() for x in allow} if allow else None
+            allow_l = {clean_name(x).lower() for x in allow} if allow else None
             wanted = {}
             for name in sorted((g.get("patches") or {}).keys()):
-                nl = name.lower()
+                nl = clean_name(name).lower()
                 if allow_l is not None and nl not in allow_l: continue
                 if v.get("merge_exclusive") and nl in seen_lower: dup_skipped.append(name); continue
                 wanted[name] = {}
                 seen_lower.add(nl)
             per_bundle.append(wanted)
-        excludes = {x.lower() for x in v.get("exclude_patches", [])}
+        excludes = {clean_name(x).lower() for x in v.get("exclude_patches", [])}
         for d in per_bundle:
             for n in list(d):
-                if n.lower() in excludes: del d[n]
+                if clean_name(n).lower() in excludes: del d[n]
         for patch_name, opts in (v.get("options") or {}).items():
-            pl = patch_name.lower()
+            pl = clean_name(patch_name).lower()
             for i, g in enumerate(gen):
                 for real in (g.get("patches") or {}):
-                    if real.lower() == pl: per_bundle[i].setdefault(real, {}).update(opts)
+                    if clean_name(real).lower() == pl: per_bundle[i].setdefault(real, {}).update(opts)
         cp = (v.get("clone_package") or "").strip()
         if cp:
             for i, g in enumerate(gen):
@@ -983,6 +1024,7 @@ def build_extra_app(app, alias, ks_fp, notes):
             if fp: note += f"Signing fingerprint: {fp}\n"
             note += "\nApplied patches:\n" + ("\n".join(f"- {x}" for x in applied) if applied else "- none") + "\n"
             if dropped: note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
+            if missing: note += "\nRequested but NOT FOUND in any bundle:\n" + "\n".join(f"- {x}" for x in missing) + "\n"
             if dup_skipped: note += "\nDuplicate patches skipped:\n" + "\n".join(f"- {x}" for x in dup_skipped) + "\n"
             note += "\nStatus: Success\n\n"
             notes.append(note)
@@ -995,53 +1037,108 @@ def main():
     if os.environ.get("CUSTOM_BUILD"):
         print("🚀 RUNNING IN CUSTOM BUILD MODE 🚀")
         app_id = os.environ.get("CUSTOM_APP", "custom")
-        pkg = os.environ.get("CUSTOM_PKG", "").strip()
-        
         default_pkgs = {
             "tiktok": "com.zhiliaoapp.musically", "youtube": "com.google.android.youtube",
             "ytmusic": "com.google.android.apps.youtube.music", "google": "com.google.android.googlequicksearchbox",
             "gemini": "com.google.android.apps.bard", "windscribe": "com.windscribe.vpn",
             "protonmail": "ch.protonmail.android", "protonvpn": "ch.protonvpn.android", "brave": "com.brave.browser"
         }
-        if not pkg: pkg = default_pkgs.get(app_id, f"com.custom.{app_id}")
 
-        ver = os.environ.get("CUSTOM_VER", "latest").strip()
-        source_choice = os.environ.get("CUSTOM_SOURCE", "auto").strip()
-        
-        # Resolve 'auto' logic
+        # ---- Optional profile load: repo profiles/ first, then custom-profiles release tag ----
+        profile_name = os.environ.get("CUSTOM_PROFILE", "").strip()
+        profile, profile_src = None, None
+        if profile_name:
+            for p in (f"profiles/{profile_name}.yaml", f"profiles/{profile_name}.yml"):
+                if os.path.exists(p):
+                    with open(p) as f: profile = yaml.safe_load(f) or {}
+                    profile_src = f"repo:{p}"
+                    break
+            if profile is None:
+                own_repo = os.environ.get("GITHUB_REPOSITORY", "")
+                if own_repo:
+                    try:
+                        rel = gh_api_get(f"https://api.github.com/repos/{own_repo}/releases/tags/custom-profiles").json()
+                        for a in rel.get("assets", []):
+                            if a.get("name", "") in (f"{profile_name}.yaml", f"{profile_name}.yml"):
+                                pdest = f".profile_tmp_{safe_name(profile_name)}.yaml"
+                                download_file(a["browser_download_url"], pdest)
+                                with open(pdest) as f: profile = yaml.safe_load(f) or {}
+                                profile_src = "release-tag:custom-profiles"
+                                break
+                    except Exception as e:
+                        print(f"profile release-tag lookup failed: {e}")
+            if profile is None:
+                print(f"❌ ERROR: profile '{profile_name}' not found in profiles/ nor on release tag 'custom-profiles'")
+                raise SystemExit(1)
+            print(f"📄 Using profile '{profile_name}' from {profile_src}")
+
+        # ---- Resolve knobs: form > profile > defaults ----
+        ver = os.environ.get("CUSTOM_VER", "").strip() or str((profile or {}).get("apk_version", "") or "").strip() or "latest"
+        src_form = os.environ.get("CUSTOM_SOURCE", "profile-default").strip()
+        source_choice = src_form if src_form not in ("", "profile-default") else str((profile or {}).get("source", "auto") or "auto")
+        abi_form = os.environ.get("CUSTOM_ABI", "profile-default").strip()
+        abi = abi_form if abi_form not in ("", "profile-default") else str((profile or {}).get("abi", "arm64-v8a") or "arm64-v8a")
+        pkg = os.environ.get("CUSTOM_PKG", "").strip() or str((profile or {}).get("package", "") or "").strip() or default_pkgs.get(app_id, f"com.custom.{app_id}")
+        clone_pkg = os.environ.get("CUSTOM_CLONE", "").strip() or str((profile or {}).get("clone_package", "") or "")
+        app_name = os.environ.get("CUSTOM_NAME", "").strip() or str((profile or {}).get("app_name", "") or "")
+
         upload_first_apps = ["tiktok", "youtube", "ytmusic", "google", "gemini"]
         source = "upload" if (source_choice == "auto" and app_id in upload_first_apps) else ("apkeep" if source_choice == "auto" else source_choice)
 
-        # Parse bundles
-        bundle_urls = [u.strip() for u in os.environ.get("CUSTOM_BUNDLES", "").split(",") if u.strip()]
-        bundles_cfg = []
-        include_patches = [p.strip() for p in os.environ.get("CUSTOM_INCLUDE", "").split(",") if p.strip()]
-        
-        for i, url in enumerate(bundle_urls):
-            repo = repo_from_url(url)
-            label = repo.split("/")[-1].replace("-patches", "").replace("-morphe", "").replace("revanced-", "").title() if repo else f"Bundle{i}"
-            b_cfg = {"url": url, "label": label}
-            if include_patches: b_cfg["patches"] = include_patches
-            bundles_cfg.append(b_cfg)
+        # ---- Bundles / allow-lists / options: profile baseline, form overrides ----
+        bundles_cfg, options_cfg = [], {}
+        global_inc = [clean_name(p) for p in os.environ.get("CUSTOM_INCLUDE", "").split(",") if clean_name(p)]
+        if profile:
+            if os.environ.get("CUSTOM_BUNDLES", "").strip():
+                print("⚠️ profile provides bundles; ignoring form bundle_urls")
+            for i, b in enumerate(profile.get("bundles") or []):
+                url = normalize_bundle_url((b.get("url") or "").strip())
+                if not url: continue
+                repo = repo_from_url(url)
+                label = (b.get("label") or (repo.split("/")[-1] if repo else f"Bundle{i}"))
+                bc = {"url": url, "label": label}
+                if b.get("pin"): bc["pin"] = str(b["pin"])
+                if b.get("patches"): bc["patches"] = [clean_name(x) for x in (b["patches"] or [])]
+                bundles_cfg.append(bc)
+                for pn, ov in (b.get("options") or {}).items():
+                    options_cfg.setdefault(pn, {}).update(ov or {})
+            if global_inc:
+                for bc in bundles_cfg:
+                    if "patches" not in bc: bc["patches"] = global_inc
+        else:
+            raw_entries = [u.strip() for u in os.environ.get("CUSTOM_BUNDLES", "").split(",") if u.strip()]
+            any_per_bundle = False
+            for i, entry in enumerate(raw_entries):
+                own = None
+                if "::" in entry:
+                    entry, own_str = entry.split("::", 1)
+                    own = [clean_name(p) for p in own_str.split(";") if clean_name(p)]
+                    if own: any_per_bundle = True
+                url = normalize_bundle_url(entry)
+                repo = repo_from_url(url)
+                label = repo.split("/")[-1].replace("-patches", "").replace("-morphe", "").replace("revanced-", "").title() if repo else f"Bundle{i}"
+                bc = {"url": url, "label": label}
+                if own: bc["patches"] = own
+                bundles_cfg.append(bc)
+            if global_inc:
+                for bc in bundles_cfg:
+                    if "patches" not in bc: bc["patches"] = global_inc
+                if any_per_bundle:
+                    print("ℹ️ global include box applied only to bundles without their own '::' list")
 
-        # Parse options (Format: PatchName.key=value)
-        options_cfg = {}
         for line in os.environ.get("CUSTOM_OPTIONS", "").splitlines():
             line = line.strip()
             if not line or "=" not in line: continue
             patch_key, val = line.split("=", 1)
             patch_name, opt_key = patch_key.rsplit(".", 1) if "." in patch_key else (patch_key, "value")
-            options_cfg.setdefault(patch_name.strip(), {})[opt_key.strip()] = val.strip()
+            options_cfg.setdefault(clean_name(patch_name), {})[opt_key.strip()] = val.strip()
 
-        exclude_patches = [p.strip() for p in os.environ.get("CUSTOM_EXCLUDE", "").split(",") if p.strip()]
-        clone_pkg = os.environ.get("CUSTOM_CLONE", "").strip()
-        app_name = os.environ.get("CUSTOM_NAME", "").strip()
-        abi = os.environ.get("CUSTOM_ABI", "arm64-v8a").strip()
-        
+        exclude_patches = [clean_name(p) for p in ((profile or {}).get("exclude_patches") or [])] + \
+                          [clean_name(p) for p in os.environ.get("CUSTOM_EXCLUDE", "").split(",") if clean_name(p)]
+
         keep_all_abis = (abi == "all")
         arch = "armeabi-v7a" if abi == "armeabi-v7a" else "arm64-v8a"
 
-        # Generate dynamic config
         config = {
             "auto_include_new_patches": False,
             "exclude_patches": [],
@@ -1057,12 +1154,11 @@ def main():
             }]
         }
 
-        # Run the exact same engine
         if os.path.exists("build"): shutil.rmtree("build")
         if os.path.exists("bundles"): shutil.rmtree("bundles")
         os.makedirs("build")
         os.makedirs("bundles")
-        
+
         alias = detect_alias()
         ks_fp = keystore_fingerprint(alias)
         get_latest_cli_jar()
@@ -1071,8 +1167,10 @@ def main():
         for app in config.get("extra_apps", []):
             build_extra_app(app, alias, ks_fp, notes)
 
+        head = "# Custom Build Release\n\n"
+        if profile_name: head += f"Profile: {profile_name} (from {profile_src})\n\n"
         with open("release_notes.md", "w") as f:
-            f.write("# Custom Build Release\n\n" + "".join(notes))
+            f.write(head + "".join(notes))
 
         if not glob.glob("build/*-patched.apk"):
             print("\n" + "=" * 60)
@@ -1082,11 +1180,11 @@ def main():
             raise SystemExit(1)
 
         print("✅ Custom build successful!")
-        return # Exit main early, skip batch logic
+        return  # Exit main early, skip batch logic
     # ==========================================
     # 📦 STANDARD BATCH MODE (config.yaml) 📦
     # ==========================================
-    
+
     with open("config.yaml", "r") as f: config = yaml.safe_load(f)
     if os.path.exists("build"): shutil.rmtree("build")
     if os.path.exists("bundles"): shutil.rmtree("bundles")
@@ -1181,6 +1279,7 @@ def main():
                 if fp: note += f"Signing fingerprint: {fp}\n"
                 note += "\nApplied patches:\n" + ("\n".join(f"- {x}" for x in applied) if applied else "- none") + "\n"
                 if dropped: note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
+                if missing: note += "\nRequested but NOT FOUND in any bundle:\n" + "\n".join(f"- {x}" for x in missing) + "\n"
                 note += "\nStatus: " + ("Success" if ok else "Failed") + "\n\n"
                 notes.append(note)
                 continue
