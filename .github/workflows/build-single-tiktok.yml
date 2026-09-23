@@ -24,7 +24,6 @@ jobs:
       - name: Install Python dependencies
         run: pip install requests pyyaml beautifulsoup4 curl_cffi
 
-      # ✅ FIXED: uses the REAL secret name from your main workflow (KEYSTORE_BASE64)
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -36,9 +35,8 @@ jobs:
           fi
           echo "${KEYSTORE_BASE64}" | base64 -d > signing/keystore.jks
           SIZE=$(stat -c%s signing/keystore.jks)
-          echo "keystore.jks size: ${SIZE} bytes"
           if [ "${SIZE}" -lt 100 ]; then
-            echo "❌ ERROR: keystore.jks too small (${SIZE} bytes) — decode failed!"
+            echo "❌ ERROR: keystore.jks too small (${SIZE} bytes)!"
             exit 1
           fi
 
@@ -58,7 +56,6 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ✅ Goes straight to the Release page (no artifacts), with per-file retry
       - name: Create release and upload with retry
         env:
           GH_TOKEN: ${{ github.token }}
