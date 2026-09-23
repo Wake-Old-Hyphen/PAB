@@ -1,7 +1,6 @@
 auto_include_new_patches: true
 exclude_patches: []
 
-# Must exist (empty) so build.py doesn't error on the Brave section
 variants: []
 
 extra_apps:
