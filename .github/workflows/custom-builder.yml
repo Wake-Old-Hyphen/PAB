@@ -3,6 +3,10 @@ name: Custom Builder (Ad-Hoc)
 on:
   workflow_dispatch:
     inputs:
+      profile:
+        description: 'Profile name (profiles/<name>.yaml in repo, or <name>.yaml uploaded to the custom-profiles release). Blank = manual mode.'
+        required: false
+        type: string
       app:
         description: 'App to build'
         required: true
@@ -18,51 +22,52 @@ on:
           - protonvpn
           - brave
       package_name:
-        description: 'Package Name (Leave blank to use default for selected app)'
+        description: 'Package name (blank = default for app, or profile value)'
         required: false
         type: string
       version:
-        description: 'App Version (e.g., 46.9.3 or latest)'
-        required: true
-        default: 'latest'
+        description: 'App version (blank = profile value, else latest)'
+        required: false
         type: string
       source:
-        description: 'APK Source'
+        description: 'APK source (profile-default = use profile/auto)'
         required: true
         type: choice
         options:
+          - profile-default
           - auto
           - upload
           - apkeep
       bundle_urls:
-        description: 'Bundle URLs (Comma-separated RAW githubusercontent links)'
-        required: true
+        description: 'Bundles: repo links or raw json links, comma-separated. Per-bundle patches: URL::Patch A;Patch B (ignored when profile is set)'
+        required: false
         type: string
       include_patches:
-        description: 'Patches to INCLUDE (Comma-separated. Leave blank for ALL)'
+        description: 'Allow-list for bundles that have NO "::" list (blank = all patches for those bundles)'
         required: false
         type: string
       exclude_patches:
-        description: 'Patches to EXCLUDE (Comma-separated)'
+        description: 'Extra patches to EXCLUDE, comma-separated (added on top of profile excludes)'
         required: false
         type: string
       patch_options:
-        description: 'Patch Options (One per line, format: PatchName.key=value)'
+        description: 'Extra options, one per line: PatchName.key=value (overrides profile options)'
         required: false
         type: string
       clone_package:
-        description: 'Clone Package Name (Optional)'
+        description: 'Clone package name (blank = profile value)'
         required: false
         type: string
       app_name:
-        description: 'Custom App Name (Optional)'
+        description: 'Custom app name (blank = profile value)'
         required: false
         type: string
       abi:
-        description: 'CPU Architecture'
+        description: 'CPU architecture (profile-default = use profile/arm64-v8a)'
         required: true
         type: choice
         options:
+          - profile-default
           - arm64-v8a
           - armeabi-v7a
           - all
@@ -107,8 +112,8 @@ jobs:
       - name: Build Custom APK
         run: python build.py
         env:
-          # Pass all form inputs to build.py
           CUSTOM_BUILD: "true"
+          CUSTOM_PROFILE: ${{ inputs.profile }}
           CUSTOM_APP: ${{ inputs.app }}
           CUSTOM_PKG: ${{ inputs.package_name }}
           CUSTOM_VER: ${{ inputs.version }}
@@ -120,8 +125,6 @@ jobs:
           CUSTOM_CLONE: ${{ inputs.clone_package }}
           CUSTOM_NAME: ${{ inputs.app_name }}
           CUSTOM_ABI: ${{ inputs.abi }}
-          
-          # Standard secrets
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -137,7 +140,6 @@ jobs:
           fi
           TAG="custom-${{ inputs.app }}-$(date +%Y%m%d-%H%M%S)"
           gh release create "$TAG" --title "Custom Build: ${{ inputs.app }} ($TAG)" --notes-file release_notes.md --prerelease
-          
           for f in build/*-patched.apk; do
             ok=0
             for i in 1 2 3 4 5; do
