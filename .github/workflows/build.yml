@@ -2,7 +2,6 @@ name: Build and Release (Batch)
 
 on:
   workflow_dispatch:
-  # Add your schedule back here if you had one, e.g.:
   # schedule:
   #   - cron: '0 0 * * *'
 
@@ -27,7 +26,6 @@ jobs:
       - name: Install Python dependencies
         run: pip install requests pyyaml beautifulsoup4 curl_cffi
 
-      # ✅ Guarded keystore decode using your real secret name
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -45,7 +43,6 @@ jobs:
             exit 1
           fi
 
-      # ✅ Passes GITHUB_TOKEN so build.py can download your uploaded APKs without rate limits
       - name: Build APKs
         run: python build.py
         env:
@@ -54,7 +51,6 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 🛡️ SAFETY NET: Saves APKs to GitHub Artifacts so they are never lost if publishing fails
       - name: Upload APKs as artifact
         uses: actions/upload-artifact@v4
         with:
@@ -75,7 +71,7 @@ jobs:
     needs: build
     steps:
       - uses: actions/checkout@v4
-        
+
       - name: Download APK artifacts
         uses: actions/download-artifact@v4
         with:
@@ -97,7 +93,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${{ steps.tag.outputs.TAG }}" --title "${{ steps.tag.outputs.TAG }}" --notes-file notes/release_notes.md
 
-      # 🚀 ANTI-UNICORN: Uploads files one-by-one with 5 retries per file
       - name: Upload assets with retry
         env:
           GH_TOKEN: ${{ github.token }}
