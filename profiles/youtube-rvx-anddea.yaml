@@ -1,0 +1,134 @@
+# Profile: YouTube RVX (Anddea) — transcribed from URV Manager selection (RVX Patches 4.3.0-dev.7)
+apk_version: "21.07.247"
+source: auto
+abi: arm64-v8a
+clone_package: anddea.youtube.zix
+app_name: YouTube RVX
+
+bundles:
+  - url: https://raw.githubusercontent.com/anddea/revanced-patches/dev/patches-bundle.json
+    label: Anddea
+    # pin: v4.3.0-dev.7        # optional: freeze bundle version for reproducible builds
+    patches:
+      - Alternative thumbnails
+      - Ambient mode control
+      - App refresh rate
+      - Bypass URL redirects
+      - Bypass image region restrictions
+      - Change form factor
+      - Change installer package name
+      - Change player flyout menu toggles
+      - Change share sheet
+      - Change start page
+      - Custom DPI
+      - Custom Shorts action buttons
+      - Custom branding for YouTube
+      - Custom double tap length
+      - Description components
+      - Disable QUIC protocol
+      - Disable edge-to-edge display
+      - Disable forced auto captions
+      - Disable haptic feedback
+      - Disable layout updates
+      - Disable playlist autoplay
+      - Disable resuming Miniplayer on startup
+      - Disable resuming Shorts on startup
+      - Disable scrolling speed limit
+      - Disable sign in to TV popup
+      - Enable debug logging
+      - Enable gradient loading screen
+      - Force original audio
+      - Fullscreen components
+      - Fullscreen video scale
+      - Gemini
+      - GmsCore support
+      - Hide Shorts dimming
+      - Hide accessibility controls dialog
+      - Hide action buttons
+      - Hide ads
+      - Hide comments components
+      - Hide feed components
+      - Hide feed flyout menu
+      - Hide layout components
+      - Hide player buttons
+      - Hide player flyout menu
+      - Hide shortcuts
+      - Hook download actions
+      - Miniplayer
+      - Navigation bar components
+      - Open channel of live avatar
+      - Open links externally
+      - Overlay buttons
+      - Override YouTube Music buttons
+      - Override certificate pinning
+      - Playback in feeds
+      - Player components
+      - PoToken provider
+      - Reload video
+      - Remember livestream playback position
+      - Remove background playback restrictions
+      - Remove viewer discretion dialog
+      - Return YouTube Dislike
+      - Return YouTube Username
+      - Sanitize sharing links
+      - Save to Watch later
+      - Seekbar components
+      - Set transcript cookies
+      - Settings for YouTube
+      - Settings menu filter
+      - Shorts components
+      - Snack bar components
+      - SponsorBlock
+      - Spoof Wi-Fi connection
+      - Spoof app version
+      - Spoof video streams
+      - Spoof watch history
+      - Swipe controls
+      - Theme
+      - Toolbar components
+      - Translations for YouTube
+      - Video playback
+      - Visual preferences icons for YouTube
+      - Voice Over Translation
+      - Wide search bar
+    options:
+      Custom Shorts action buttons:
+        Shorts icon style: Cairo
+      Custom branding for YouTube:
+        App name: YouTube RVX
+        App icon: Revancify Red
+      Custom double tap length:
+        Double-tap to seek values: "3, 5, 10, 15, 20, 30, 60, 120, 180"
+      GmsCore support:
+        Check GmsCore: true
+        Package name of YouTube: anddea.youtube.zix
+        Patch all manifest components: true
+      Hide shortcuts:
+        Hide Explore: false
+        Hide Subscriptions: false
+        Hide Search: false
+        Hide Shorts: true
+      Overlay buttons:
+        Icon type: Rounded
+        Wider between-buttons space: false
+        Change top buttons: true
+      Settings for YouTube:
+        RVX settings label: RVX
+      Snack bar components:
+        Corner radius: 8.0dip
+        Apply corner radius to playlist bottom bar: false
+        Dark theme background color: YouTube Dark
+        Light theme background color: YouTube Light
+        Stroke color: "None"
+      SponsorBlock:
+        New segment alignment: Right
+      Theme:
+        Custom dark theme color: Amoled Black
+        Custom light theme color: White
+        Precompile legacy themes (Android 8-10): false
+      Translations for YouTube:
+        Translations to add: "ar, az-rAZ, bn, cs-rCZ, de-rDE, el-rGR, es-rES, fa-rIR, fr-rFR, hu-rHU, in, it-rIT, iw-rIL, ja-rJP, ko-rKR, pl-rPL, pt-rBR, ru-rRU, th-rTH, tr-rTR, uk-rUA, vi-rVN, zh-rCN, zh-rTW"
+        String resources to keep: "af, am, ar, ar-rXB, as, az, b+es+419, b+sr+Latn, be, bg, bn, bs, ca, cs, da, de, el, en-rAU, en-rCA, en-rGB, en-rIN, en-rXA, en-rXC, es, es-rUS, et, eu, fa, fi, fil-rPH, fr, fr-rCA, gl, gu, hi, hr, hu, hy, id, in, is, it, iw, ja, ka, kk, km, kn, ko, ky, lo, lt, lv, mk, ml, mn, mr, ms, my, nb, ne, nl, no, or, pa, pl, pt, pt-rBR, pt-rPT, ro, ru, si, sk, sl, sq, sr, sv, sw, ta, te, th, tl, tr, uk, ur, uz, vi, zh, zh-rCN, zh-rHK, zh-rTW, zu"
+      Visual preferences icons for YouTube:
+        RVX settings menu icon: Extension
+        Apply to all settings menu: true
