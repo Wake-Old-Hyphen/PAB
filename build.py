@@ -971,23 +971,28 @@ def find_android_tool(name):
         return cands[0]
     return None
 
+def ensure_apkeditor():
+    jar = "build/APKEditor.jar"
+    if os.path.exists(jar) and os.path.getsize(jar) > 500_000:
+        return jar
+    rel = gh_api_get("https://api.github.com/repos/REAndroid/APKEditor/releases/latest").json()
+    asset = next((a for a in rel.get("assets", []) if (a.get("name") or "").endswith(".jar")), None)
+    if not asset: raise Exception("No APKEditor jar asset found on latest release")
+    download_file(asset["browser_download_url"], jar)
+    if not (os.path.exists(jar) and os.path.getsize(jar) > 500_000):
+        raise Exception("APKEditor jar download invalid")
+    return jar
+
 def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_alias, ks_key_password):
-    """
-    Permanently strip permissions using APKEditor (avoids apktool's aapt2 PNG crashes).
-    Sanitizes foregroundServiceType for Android 14+ compliance.
-    """
     print(f"\n🔒 Stripping permissions from {os.path.basename(apk_path)}")
     print(f"Allowlist: {len(allowlist)} permissions")
 
     decoded_dir = "build/apkeditor_decoded"
     stripped_apk = "build/stripped_unsigned.apk"
     aligned_apk = "build/stripped_aligned.apk"
-    apkeditor_jar = "build/APKEditor.jar"
 
     try:
-        if not os.path.exists(apkeditor_jar):
-            print("  → Downloading APKEditor...")
-            download_file("https://github.com/REAndroid/APKEditor/releases/download/V1.3.9/APKEditor-1.3.9.jar", apkeditor_jar)
+        apkeditor_jar = ensure_apkeditor()
 
         print("  → Decoding with APKEditor...")
         if os.path.exists(decoded_dir):
@@ -1005,16 +1010,16 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
         print("  → Parsing AndroidManifest.xml...")
         tree = ET.parse(manifest_path)
         root = tree.getroot()
-        
         ns_map = dict([node for _, node in ET.iterparse(manifest_path, events=['start-ns'])])
         android_ns = ns_map.get('android', ANDROID_NS)
         ns = f"{{{android_ns}}}"
 
         removed = []
         for elem in list(root.iter()):
-            if elem.tag.endswith("uses-permission"):
+            if elem.tag.endswith("uses-permission") or elem.tag.endswith("uses-permission-sdk-23"):
                 perm_name = elem.get(f"{ns}name") or elem.get("name")
-                if perm_name and perm_name not in allowlist:
+                if not perm_name: continue
+                if perm_name.startswith("disabled_") or perm_name not in allowlist:
                     parent = None
                     for p in root.iter():
                         if elem in list(p): parent = p; break
@@ -1026,11 +1031,14 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
             print("  ✅ No permissions to remove")
             return True
 
-        print(f"  → Removed {len(removed)} permissions")
-        for p in removed[:10]: print(f"     - {p}")
-        if len(removed) > 10: print(f"     ... and {len(removed) - 10} more")
+        print(f"  → Removed {len(removed)} permission entries")
+        for p in removed[:12]: print(f"     - {p}")
+        if len(removed) > 12: print(f"     ... and {len(removed) - 12} more")
 
-        affected = {FGS_PERM_TO_TYPE[p] for p in removed if p in FGS_PERM_TO_TYPE}
+        affected = set()
+        for p in removed:
+            b = p[len("disabled_"):] if p.startswith("disabled_") else p
+            if b in FGS_PERM_TO_TYPE: affected.add(FGS_PERM_TO_TYPE[b])
         if affected:
             fixed = 0
             for elem in root.iter():
@@ -1038,9 +1046,8 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
                     fgs = elem.get(f"{ns}foregroundServiceType") or elem.get("foregroundServiceType")
                     if not fgs: continue
                     tokens = [t for t in fgs.split("|") if t and t not in affected]
-                    if tokens: 
-                        elem.set(f"{ns}foregroundServiceType", "|".join(tokens))
-                    else: 
+                    if tokens: elem.set(f"{ns}foregroundServiceType", "|".join(tokens))
+                    else:
                         if f"{ns}foregroundServiceType" in elem.attrib: del elem.attrib[f"{ns}foregroundServiceType"]
                         if "foregroundServiceType" in elem.attrib: del elem.attrib["foregroundServiceType"]
                     fixed += 1
@@ -1076,21 +1083,23 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
 
         aapt = find_android_tool("aapt") or find_android_tool("aapt2")
         if aapt:
-            print("  → Verifying permissions...")
+            print("  → Verifying final manifest...")
             result = subprocess.run([aapt, "dump", "permissions", apk_path], capture_output=True, text=True)
-            lines = result.stdout.splitlines()
             final_perms = []
-            for line in lines:
-                if line.strip().startswith("uses-permission:"):
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("uses-permission:"):
                     m2 = re.search(r"name='([^']+)'", line) or re.search(r'name="([^"]+)"', line)
                     if m2: final_perms.append(m2.group(1))
-            violations = [p for p in final_perms if p not in allowlist]
+            violations = [p for p in final_perms if p.startswith("disabled_") or p not in allowlist]
             if violations:
-                print(f"  ⚠️ WARNING: {len(violations)} non-allowlisted permissions still present:")
-                for v in violations[:5]: print(f"     - {v}")
+                print(f"  ⚠️ WARNING: {len(violations)} unexpected entries remain:")
+                for v in violations[:8]: print(f"     - {v}")
             else:
-                print(f"  ✅ Permission stripping successful! Only {len(final_perms)} permissions remain.")
-        
+                print(f"  ✅ Success! Manifest contains exactly {len(final_perms)} permissions.")
+        else:
+            print("  ⚠️ aapt not found; skipping verification")
+
         shutil.rmtree(decoded_dir, ignore_errors=True)
         for f in [stripped_apk, aligned_apk]:
             if os.path.exists(f): os.remove(f)
