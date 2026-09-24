@@ -16,6 +16,7 @@ strip_permissions:
   - android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK
   - android.permission.ACCESS_WIFI_STATE
   - android.permission.WAKE_LOCK
+  - android.permission.ACCESS_NETWORK_STATE
 
 bundles:
   - url: https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json
