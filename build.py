@@ -1155,9 +1155,6 @@ def build_extra_app(app, alias, ks_fp, notes):
         else: notes.append(f"## {vid}\nStatus: Failed\n\n")
 
 def main():
-    # ==========================================
-    # 🚀 CUSTOM BUILD MODE (Web Form Override) 🚀
-    # ==========================================
     if os.environ.get("CUSTOM_BUILD"):
         print("🚀 RUNNING IN CUSTOM BUILD MODE 🚀")
         app_id = os.environ.get("CUSTOM_APP", "custom")
@@ -1296,7 +1293,6 @@ def main():
         for app in config.get("extra_apps", []):
             build_extra_app(app, alias, ks_fp, notes)
         
-        # 🔒 Permission stripping (profile-only feature)
         if profile and profile.get("strip_permissions"):
             allowlist = profile["strip_permissions"]
             patched_apks = glob.glob("build/*-patched.apk")
@@ -1331,9 +1327,6 @@ def main():
         print("✅ Custom build successful!")
         return
 
-    # ==========================================
-    # 📦 STANDARD BATCH MODE (config.yaml) 📦
-    # ==========================================
     with open("config.yaml", "r") as f: config = yaml.safe_load(f)
     if os.path.exists("build"): shutil.rmtree("build")
     if os.path.exists("bundles"): shutil.rmtree("bundles")
