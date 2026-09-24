@@ -46,6 +46,30 @@ RAW_CACHE = {}
 BASE_CACHE = {}
 DETECTED_VERSIONS = {}
 
+ANDROID_NS = "http://schemas.android.com/apk/res/android"
+ET.register_namespace("android", ANDROID_NS)
+ET.register_namespace("tools", "http://schemas.android.com/tools")
+
+FGS_PERM_TO_TYPE = {
+    "android.permission.FOREGROUND_SERVICE_MICROPHONE": "microphone",
+    "android.permission.FOREGROUND_SERVICE_CAMERA": "camera",
+    "android.permission.FOREGROUND_SERVICE_LOCATION": "location",
+    "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK": "mediaPlayback",
+    "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION": "mediaProjection",
+    "android.permission.FOREGROUND_SERVICE_PHONE_CALL": "phoneCall",
+    "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE": "connectedDevice",
+    "android.permission.FOREGROUND_SERVICE_DATA_SYNC": "dataSync",
+    "android.permission.FOREGROUND_SERVICE_HEALTH": "health",
+    "android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING": "remoteMessaging",
+    "android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED": "systemExempted",
+    "android.permission.FOREGROUND_SERVICE_SPECIAL_USE": "specialUse",
+    "android.permission.RECORD_AUDIO": "microphone",
+    "android.permission.CAMERA": "camera",
+    "android.permission.ACCESS_FINE_LOCATION": "location",
+    "android.permission.ACCESS_COARSE_LOCATION": "location",
+    "android.permission.ACCESS_BACKGROUND_LOCATION": "location",
+}
+
 def gh_api_get(url, timeout=60):
     headers = dict(UA)
     tok = os.environ.get("GITHUB_TOKEN", "")
@@ -930,135 +954,165 @@ def get_latest_cli_jar():
             return
     raise Exception("Could not find Morphe CLI all.jar")
 
+def find_android_tool(name):
+    p = shutil.which(name)
+    if p: return p
+    roots = []
+    for env in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        v = os.environ.get(env)
+        if v: roots.append(v)
+    roots.append("/usr/local/lib/android/sdk")
+    cands = []
+    for r in roots:
+        cands += glob.glob(os.path.join(r, "build-tools", "*", name))
+    cands = [c for c in cands if os.path.isfile(c) and os.access(c, os.X_OK)]
+    if cands:
+        cands.sort(key=lambda x: parse_ver(os.path.basename(os.path.dirname(x))), reverse=True)
+        return cands[0]
+    return None
+
 def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_alias, ks_key_password):
     """
-    Permanently strip permissions from APK manifest using apktool.
-    Returns True if successful, False if failed (but doesn't crash the build).
+    Permanently strip permissions using APKEditor (avoids apktool's aapt2 PNG crashes).
+    Sanitizes foregroundServiceType for Android 14+ compliance.
     """
     print(f"\n🔒 Stripping permissions from {os.path.basename(apk_path)}")
     print(f"Allowlist: {len(allowlist)} permissions")
-    
-    decoded_dir = "build/apktool_decoded"
+
+    decoded_dir = "build/apkeditor_decoded"
     stripped_apk = "build/stripped_unsigned.apk"
     aligned_apk = "build/stripped_aligned.apk"
-    
+    apkeditor_jar = "build/APKEditor.jar"
+
     try:
-        # 1. Decode with apktool (no smali, no resources - just manifest)
-        print("  → Decoding with apktool (manifest only)...")
+        if not os.path.exists(apkeditor_jar):
+            print("  → Downloading APKEditor...")
+            download_file("https://github.com/REAndroid/APKEditor/releases/download/V1.3.9/APKEditor-1.3.9.jar", apkeditor_jar)
+
+        print("  → Decoding with APKEditor...")
         if os.path.exists(decoded_dir):
             shutil.rmtree(decoded_dir)
         subprocess.run(
-            ["apktool", "d", apk_path, "-o", decoded_dir, "-f", "--no-src", "--no-res"],
+            ["java", "-jar", apkeditor_jar, "d", "-i", apk_path, "-o", decoded_dir, "-f"],
             check=True, capture_output=True, text=True
         )
-        
-        # 2. Parse and edit manifest
+
         manifest_path = os.path.join(decoded_dir, "AndroidManifest.xml")
         if not os.path.exists(manifest_path):
             print("  ⚠️ AndroidManifest.xml not found, skipping permission strip")
             return False
-        
+
         print("  → Parsing AndroidManifest.xml...")
         tree = ET.parse(manifest_path)
         root = tree.getroot()
         
-        # Android namespace
-        ns = "{http://schemas.android.com/apk/res/android}"
-        
-        # Find all uses-permission elements
+        ns_map = dict([node for _, node in ET.iterparse(manifest_path, events=['start-ns'])])
+        android_ns = ns_map.get('android', ANDROID_NS)
+        ns = f"{{{android_ns}}}"
+
         removed = []
-        for elem in root.findall(".//"):
-            if elem.tag.endswith("uses-permission") or elem.tag.endswith("uses-permission-sdk-23"):
-                perm_name = elem.get(f"{ns}name")
+        for elem in list(root.iter()):
+            if elem.tag.endswith("uses-permission"):
+                perm_name = elem.get(f"{ns}name") or elem.get("name")
                 if perm_name and perm_name not in allowlist:
-                    root.remove(elem)
-                    removed.append(perm_name)
-        
+                    parent = None
+                    for p in root.iter():
+                        if elem in list(p): parent = p; break
+                    if parent is not None:
+                        parent.remove(elem)
+                        removed.append(perm_name)
+
         if not removed:
             print("  ✅ No permissions to remove")
             return True
-        
+
         print(f"  → Removed {len(removed)} permissions")
-        for p in removed[:10]:
-            print(f"     - {p}")
-        if len(removed) > 10:
-            print(f"     ... and {len(removed) - 10} more")
-        
-        # 3. Write modified manifest
+        for p in removed[:10]: print(f"     - {p}")
+        if len(removed) > 10: print(f"     ... and {len(removed) - 10} more")
+
+        affected = {FGS_PERM_TO_TYPE[p] for p in removed if p in FGS_PERM_TO_TYPE}
+        if affected:
+            fixed = 0
+            for elem in root.iter():
+                if elem.tag.endswith("service"):
+                    fgs = elem.get(f"{ns}foregroundServiceType") or elem.get("foregroundServiceType")
+                    if not fgs: continue
+                    tokens = [t for t in fgs.split("|") if t and t not in affected]
+                    if tokens: 
+                        elem.set(f"{ns}foregroundServiceType", "|".join(tokens))
+                    else: 
+                        if f"{ns}foregroundServiceType" in elem.attrib: del elem.attrib[f"{ns}foregroundServiceType"]
+                        if "foregroundServiceType" in elem.attrib: del elem.attrib["foregroundServiceType"]
+                    fixed += 1
+            print(f"  → Sanitized foregroundServiceType on {fixed} service(s)")
+
         print("  → Writing modified manifest...")
         tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
-        
-        # 4. Rebuild with apktool
-        print("  → Rebuilding with apktool...")
+
+        print("  → Rebuilding with APKEditor...")
         subprocess.run(
-            ["apktool", "b", decoded_dir, "-o", stripped_apk],
+            ["java", "-jar", apkeditor_jar, "b", "-i", decoded_dir, "-o", stripped_apk],
             check=True, capture_output=True, text=True
         )
-        
-        # 5. Zipalign
-        print("  → Running zipalign...")
-        subprocess.run(
-            ["zipalign", "-f", "-p", "4", stripped_apk, aligned_apk],
-            check=True, capture_output=True, text=True
-        )
-        
-        # 6. Re-sign with apksigner
+
+        sign_src = stripped_apk
+        zipalign = find_android_tool("zipalign")
+        if zipalign:
+            print("  → Running zipalign...")
+            subprocess.run([zipalign, "-f", "-p", "4", stripped_apk, aligned_apk], check=True, capture_output=True, text=True)
+            sign_src = aligned_apk
+        else:
+            print("  ⚠️ zipalign not found; signing without alignment")
+
+        apksigner = find_android_tool("apksigner")
+        if not apksigner: raise Exception("apksigner not found")
         print("  → Re-signing with apksigner...")
         subprocess.run(
-            [
-                "apksigner", "sign",
-                "--ks", ks_path,
-                "--ks-key-alias", ks_alias,
-                "--ks-pass", f"pass:{ks_password}",
-                "--key-pass", f"pass:{ks_key_password}",
-                "--out", apk_path,
-                aligned_apk
-            ],
+            [apksigner, "sign", "--ks", ks_path, "--ks-key-alias", ks_alias,
+             "--ks-pass", f"pass:{ks_password}", "--key-pass", f"pass:{ks_key_password}",
+             "--out", apk_path, sign_src],
             check=True, capture_output=True, text=True
         )
+
+        aapt = find_android_tool("aapt") or find_android_tool("aapt2")
+        if aapt:
+            print("  → Verifying permissions...")
+            result = subprocess.run([aapt, "dump", "permissions", apk_path], capture_output=True, text=True)
+            lines = result.stdout.splitlines()
+            final_perms = []
+            for line in lines:
+                if line.strip().startswith("uses-permission:"):
+                    m2 = re.search(r"name='([^']+)'", line) or re.search(r'name="([^"]+)"', line)
+                    if m2: final_perms.append(m2.group(1))
+            violations = [p for p in final_perms if p not in allowlist]
+            if violations:
+                print(f"  ⚠️ WARNING: {len(violations)} non-allowlisted permissions still present:")
+                for v in violations[:5]: print(f"     - {v}")
+            else:
+                print(f"  ✅ Permission stripping successful! Only {len(final_perms)} permissions remain.")
         
-        # 7. Verify with aapt
-        print("  → Verifying permissions...")
-        result = subprocess.run(
-            ["aapt", "dump", "permissions", apk_path],
-            capture_output=True, text=True
-        )
-        
-        lines = result.stdout.splitlines()
-        final_perms = [line.strip() for line in lines if line.startswith("uses-permission:")]
-        final_perms = [p.split("'")[1] if "'" in p else p for p in final_perms]
-        
-        violations = [p for p in final_perms if p not in allowlist]
-        if violations:
-            print(f"  ⚠️ WARNING: {len(violations)} non-allowlisted permissions still present:")
-            for v in violations[:5]:
-                print(f"     - {v}")
-        else:
-            print(f"  ✅ Permission stripping successful! Only {len(final_perms)} permissions remain.")
-        
-        # Cleanup
         shutil.rmtree(decoded_dir, ignore_errors=True)
         for f in [stripped_apk, aligned_apk]:
-            if os.path.exists(f):
-                os.remove(f)
-        
+            if os.path.exists(f): os.remove(f)
         return True
-        
+
     except subprocess.CalledProcessError as e:
         print(f"  ⚠️ Permission stripping failed: {e}")
-        print(f"     stdout: {e.stdout[:500] if e.stdout else 'N/A'}")
-        print(f"     stderr: {e.stderr[:500] if e.stderr else 'N/A'}")
-        print("  → Keeping original patched APK (without permission stripping)")
-        for path in [decoded_dir, stripped_apk, aligned_apk]:
-            if os.path.exists(path):
-                if os.path.isdir(path):
-                    shutil.rmtree(path, ignore_errors=True)
-                else:
-                    os.remove(path)
+        print(f"     stdout: {(e.stdout or '')[:500]}")
+        print(f"     stderr: {(e.stderr or '')[:500]}")
+        print("  → Keeping original patched APK")
+        for p in [decoded_dir, stripped_apk, aligned_apk]:
+            if os.path.exists(p):
+                if os.path.isdir(p): shutil.rmtree(p, ignore_errors=True)
+                else: os.remove(p)
         return False
     except Exception as e:
         print(f"  ⚠️ Permission stripping error: {e}")
         print("  → Keeping original patched APK")
+        for p in [decoded_dir, stripped_apk, aligned_apk]:
+            if os.path.exists(p):
+                if os.path.isdir(p): shutil.rmtree(p, ignore_errors=True)
+                else: os.remove(p)
         return False
 
 def build_extra_app(app, alias, ks_fp, notes):
@@ -1075,12 +1129,13 @@ def build_extra_app(app, alias, ks_fp, notes):
         for b in v.get("bundles", []):
             mpp = f"bundles/{aid}_{safe_name(b['label'])}.mpp"
             try:
+                url_n = normalize_bundle_url(b["url"])
                 if b.get("pin"):
-                    ver = download_pinned_mpp(repo_from_url(normalize_bundle_url(b["url"])), b["pin"], mpp)
+                    ver = download_pinned_mpp(repo_from_url(url_n), b["pin"], mpp)
                 else:
-                    ver = download_bundle_smart(normalize_bundle_url(b["url"]), mpp)
+                    ver = download_bundle_smart(url_n, mpp)
                 b["_ver"] = ver
-                b["_status"] = get_release_status(repo_from_url(normalize_bundle_url(b["url"])), ver)
+                b["_status"] = get_release_status(repo_from_url(url_n), ver)
                 mpps.append(mpp)
             except Exception as e: ok = False; break
         v["_ok"] = ok
@@ -1292,25 +1347,21 @@ def main():
         notes = []
         for app in config.get("extra_apps", []):
             build_extra_app(app, alias, ks_fp, notes)
-        
+
         if profile and profile.get("strip_permissions"):
-            allowlist = profile["strip_permissions"]
+            allowlist = [clean_name(p) for p in profile["strip_permissions"]]
             patched_apks = glob.glob("build/*-patched.apk")
             if patched_apks:
                 apk_path = patched_apks[0]
-                ks_path = "signing/keystore.jks"
-                ks_password = os.environ.get("KEYSTORE_PASSWORD", "")
-                ks_alias = alias
-                ks_key_password = os.environ.get("KEY_PASSWORD", "")
-                
                 success = strip_permissions_from_apk(
-                    apk_path, allowlist, ks_path, ks_password, ks_alias, ks_key_password
+                    apk_path, allowlist, "signing/keystore.jks",
+                    os.environ.get("KEYSTORE_PASSWORD", ""), alias, os.environ.get("KEY_PASSWORD", "")
                 )
-                
                 if success:
-                    notes.insert(0, "## Permission Stripping\n✅ Permissions stripped successfully. Only allowlisted permissions remain.\n\n")
+                    fp2 = verify_signature(apk_path, ks_fp)
+                    notes.insert(0, f"## Permission Stripping\n✅ Permissions stripped to {len(allowlist)} allowlisted entries; foregroundServiceType sanitized; re-signed (fingerprint match: {fp2 == ks_fp if ks_fp else 'n/a'}).\n\n")
                 else:
-                    notes.insert(0, "## Permission Stripping\n⚠️ Permission stripping failed. Original patched APK kept.\n\n")
+                    notes.insert(0, "## Permission Stripping\n⚠️ Permission stripping failed. Original patched APK kept (all stock permissions remain).\n\n")
 
         head = "# Custom Build Release\n\n"
         if profile_name: head += f"Profile: {profile_name} (from {profile_src})\n\n"
