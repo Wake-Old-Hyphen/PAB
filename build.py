@@ -1030,6 +1030,141 @@ def build_extra_app(app, alias, ks_fp, notes):
             notes.append(note)
         else: notes.append(f"## {vid}\nStatus: Failed\n\n")
 
+def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_alias, ks_key_password):
+    """
+    Permanently strip permissions from APK manifest using apktool.
+    Returns True if successful, False if failed (but doesn't crash the build).
+    """
+    import xml.etree.ElementTree as ET
+    
+    print(f"\n🔒 Stripping permissions from {os.path.basename(apk_path)}")
+    print(f"Allowlist: {len(allowlist)} permissions")
+    
+    decoded_dir = "build/apktool_decoded"
+    stripped_apk = "build/stripped_unsigned.apk"
+    aligned_apk = "build/stripped_aligned.apk"
+    
+    try:
+        # 1. Decode with apktool (no smali, just resources)
+        print("  → Decoding with apktool...")
+        if os.path.exists(decoded_dir):
+            shutil.rmtree(decoded_dir)
+        subprocess.run(
+            ["apktool", "d", apk_path, "-o", decoded_dir, "-f", "--no-src"],
+            check=True, capture_output=True, text=True
+        )
+        
+        # 2. Parse and edit manifest
+        manifest_path = os.path.join(decoded_dir, "AndroidManifest.xml")
+        if not os.path.exists(manifest_path):
+            print("  ⚠️ AndroidManifest.xml not found, skipping permission strip")
+            return False
+        
+        print("  → Parsing AndroidManifest.xml...")
+        tree = ET.parse(manifest_path)
+        root = tree.getroot()
+        
+        # Android namespace
+        ns = "{http://schemas.android.com/apk/res/android}"
+        
+        # Find all uses-permission elements
+        removed = []
+        for elem in root.findall(".//"):
+            if elem.tag.endswith("uses-permission") or elem.tag.endswith("uses-permission-sdk-23"):
+                perm_name = elem.get(f"{ns}name")
+                if perm_name and perm_name not in allowlist:
+                    root.remove(elem)
+                    removed.append(perm_name)
+        
+        if not removed:
+            print("  ✅ No permissions to remove")
+            return True
+        
+        print(f"  → Removed {len(removed)} permissions")
+        for p in removed[:10]:  # Show first 10
+            print(f"     - {p}")
+        if len(removed) > 10:
+            print(f"     ... and {len(removed) - 10} more")
+        
+        # 3. Write modified manifest
+        print("  → Writing modified manifest...")
+        tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
+        
+        # 4. Rebuild with apktool
+        print("  → Rebuilding with apktool...")
+        subprocess.run(
+            ["apktool", "b", decoded_dir, "-o", stripped_apk, "--use-aapt2"],
+            check=True, capture_output=True, text=True
+        )
+        
+        # 5. Zipalign
+        print("  → Running zipalign...")
+        subprocess.run(
+            ["zipalign", "-f", "-p", "4", stripped_apk, aligned_apk],
+            check=True, capture_output=True, text=True
+        )
+        
+        # 6. Re-sign with apksigner
+        print("  → Re-signing with apksigner...")
+        subprocess.run(
+            [
+                "apksigner", "sign",
+                "--ks", ks_path,
+                "--ks-key-alias", ks_alias,
+                "--ks-pass", f"pass:{ks_password}",
+                "--key-pass", f"pass:{ks_key_password}",
+                "--out", apk_path,  # Overwrite original patched APK
+                aligned_apk
+            ],
+            check=True, capture_output=True, text=True
+        )
+        
+        # 7. Verify with aapt
+        print("  → Verifying permissions...")
+        result = subprocess.run(
+            ["aapt", "dump", "permissions", apk_path],
+            capture_output=True, text=True
+        )
+        
+        # Parse aapt output to confirm only allowlisted permissions remain
+        lines = result.stdout.splitlines()
+        final_perms = [line.strip() for line in lines if line.startswith("uses-permission:")]
+        final_perms = [p.split("'")[1] if "'" in p else p for p in final_perms]
+        
+        violations = [p for p in final_perms if p not in allowlist]
+        if violations:
+            print(f"  ⚠️ WARNING: {len(violations)} non-allowlisted permissions still present:")
+            for v in violations[:5]:
+                print(f"     - {v}")
+        else:
+            print(f"  ✅ Permission stripping successful! Only {len(final_perms)} permissions remain.")
+        
+        # Cleanup
+        shutil.rmtree(decoded_dir, ignore_errors=True)
+        for f in [stripped_apk, aligned_apk]:
+            if os.path.exists(f):
+                os.remove(f)
+        
+        return True
+        
+    except subprocess.CalledProcessError as e:
+        print(f"  ⚠️ Permission stripping failed: {e}")
+        print(f"     stdout: {e.stdout[:500]}")
+        print(f"     stderr: {e.stderr[:500]}")
+        print("  → Keeping original patched APK (without permission stripping)")
+        # Cleanup on failure
+        for path in [decoded_dir, stripped_apk, aligned_apk]:
+            if os.path.exists(path):
+                if os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    os.remove(path)
+        return False
+    except Exception as e:
+        print(f"  ⚠️ Permission stripping error: {e}")
+        print("  → Keeping original patched APK")
+        return False
+
 def main():
     # ==========================================
     # 🚀 CUSTOM BUILD MODE (Web Form Override) 🚀
