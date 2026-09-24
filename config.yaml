@@ -79,7 +79,7 @@ extra_apps:
         bundles:
           - url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
             label: "HXReBorn"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
             label: "Nai64"
             patches:
               - "Empty Clipboard Report"
@@ -89,7 +89,7 @@ extra_apps:
         bundles:
           - url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"
             label: "Icysymmetra"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
             label: "Nai64"
             patches:
               - "Empty Clipboard Report"
@@ -99,7 +99,7 @@ extra_apps:
         bundles:
           - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
             label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
             label: "Nai64"
             patches:
               - "Empty Clipboard Report"
@@ -109,7 +109,7 @@ extra_apps:
         bundles:
           - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
             label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
             label: "Nai64"
             patches:
               - "Empty Clipboard Report"
@@ -119,7 +119,7 @@ extra_apps:
         bundles:
           - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
             label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
             label: "Nai64"
             patches:
               - "Empty Clipboard Report"
@@ -129,7 +129,17 @@ extra_apps:
         bundles:
           - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
             label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
+            label: "Nai64"
+            patches:
+              - "Empty Clipboard Report"
+
+      - id: "TikTok-47.0.3-Hushfeed"
+        apk_version: "47.0.3"
+        bundles:
+          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
+            label: "Hushfeed"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
             label: "Nai64"
             patches:
               - "Empty Clipboard Report"
@@ -139,7 +149,7 @@ extra_apps:
         bundles:
           - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
             label: "Kveld9"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64Patches/main/patches-bundle.json"
+          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
             label: "Nai64"
             patches:
               - "Empty Clipboard Report"
