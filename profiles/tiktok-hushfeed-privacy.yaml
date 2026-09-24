@@ -1,0 +1,23 @@
+# TikTok Privacy-Hardened: 47.0.3 + Hushfeed + permission stripping
+apk_version: "47.0.3"
+source: upload
+abi: arm64-v8a
+clone_package: com.tiktok.zixmophe
+app_name: TikTok Privacy
+
+# Permission allowlist: ONLY these permissions will remain
+strip_permissions:
+  - android.permission.MODIFY_AUDIO_SETTINGS
+  - android.permission.FOREGROUND_SERVICE
+  - android.permission.INTERNET
+  - android.permission.READ_EXTERNAL_STORAGE
+  - android.permission.FOREGROUND_SERVICE_DATA_SYNC
+  - android.permission.WRITE_EXTERNAL_STORAGE
+  - android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK
+  - android.permission.ACCESS_WIFI_STATE
+  - android.permission.WAKE_LOCK
+
+bundles:
+  - url: https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json
+    label: Hushfeed
+    # patches: (omit = ALL compatible patches)
