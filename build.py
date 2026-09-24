@@ -11,6 +11,7 @@ import tarfile
 import zipfile
 import hashlib
 import subprocess
+import xml.etree.ElementTree as ET
 from urllib.parse import quote_plus, urljoin
 
 import requests
@@ -43,7 +44,7 @@ UA = {
 }
 RAW_CACHE = {}
 BASE_CACHE = {}
-DETECTED_VERSIONS = {}   # real app versions parsed from CLI output (fixes "latest" in filenames)
+DETECTED_VERSIONS = {}
 
 def gh_api_get(url, timeout=60):
     headers = dict(UA)
@@ -113,7 +114,6 @@ def ensure_apkeep():
         os.chmod(path, 0o755)
         return path
     rel = gh_api_get("https://api.github.com/repos/EFForg/apkeep/releases/latest").json()
-    # FIXED: prefer the standard Linux GNU binary, NOT the Android binary
     chosen = next((a for a in rel.get("assets", []) if "unknown-linux-gnu" in a.get("name", "").lower() and "x86_64" in a.get("name", "").lower() and not a.get("name", "").endswith((".deb", ".rpm", ".sig"))), None)
     if not chosen:
         chosen = next((a for a in rel.get("assets", []) if "linux" in a.get("name", "").lower() and "x86_64" in a.get("name", "").lower() and not a.get("name", "").endswith((".deb", ".rpm", ".sig"))), None)
@@ -229,7 +229,6 @@ def repo_from_url(url):
     return None
 
 def normalize_bundle_url(url):
-    """Accept plain repo links and /blob/ links; convert to raw patches-bundle.json."""
     u = (url or "").strip()
     m = re.match(r"^https?://(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", u)
     if m:
@@ -727,8 +726,6 @@ def enable_entry(entry, vals):
             elif "package" in kl and "update" not in kl: set_option_value(entry["options"], k, pkg)
 
 def make_variant_options(gen_data, per_bundle):
-    """Enable exactly the wanted patches; tolerate whitespace/case differences and
-    fall back to a unique substring match so small typos never silently vanish."""
     data = copy.deepcopy(gen_data)
     found = set()
     all_wanted = set()
@@ -842,12 +839,9 @@ def run_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles, ke
     if not keep_all_abis: cmd += ["--striplibs", "arm64-v8a"]
     cmd += ["-o", out_apk, apk_path]
     r = subprocess.run(cmd, capture_output=True, text=True)
-
-    # Capture the real app version reported by the CLI (fixes "latest" in filenames)
     m = re.search(r"Filtering patches for\s+[\w.]+\s+v([0-9][0-9A-Za-z_\-]*(?:\.[0-9A-Za-z_\-]+)*)", r.stdout or "")
     if m:
         DETECTED_VERSIONS[label] = m.group(1)
-
     applied = list(dict.fromkeys(m.strip() for m in re.findall(r"Applied:\s*(.+)", r.stdout)))
     failed = list(dict.fromkeys(m.strip() for m in re.findall(r"FAILED:\s*(.+)", r.stdout + "\n" + r.stderr)))
     return r.returncode == 0, applied, failed, missing
@@ -936,6 +930,137 @@ def get_latest_cli_jar():
             return
     raise Exception("Could not find Morphe CLI all.jar")
 
+def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_alias, ks_key_password):
+    """
+    Permanently strip permissions from APK manifest using apktool.
+    Returns True if successful, False if failed (but doesn't crash the build).
+    """
+    print(f"\n🔒 Stripping permissions from {os.path.basename(apk_path)}")
+    print(f"Allowlist: {len(allowlist)} permissions")
+    
+    decoded_dir = "build/apktool_decoded"
+    stripped_apk = "build/stripped_unsigned.apk"
+    aligned_apk = "build/stripped_aligned.apk"
+    
+    try:
+        # 1. Decode with apktool (no smali, just resources)
+        print("  → Decoding with apktool...")
+        if os.path.exists(decoded_dir):
+            shutil.rmtree(decoded_dir)
+        subprocess.run(
+            ["apktool", "d", apk_path, "-o", decoded_dir, "-f", "--no-src"],
+            check=True, capture_output=True, text=True
+        )
+        
+        # 2. Parse and edit manifest
+        manifest_path = os.path.join(decoded_dir, "AndroidManifest.xml")
+        if not os.path.exists(manifest_path):
+            print("  ⚠️ AndroidManifest.xml not found, skipping permission strip")
+            return False
+        
+        print("  → Parsing AndroidManifest.xml...")
+        tree = ET.parse(manifest_path)
+        root = tree.getroot()
+        
+        # Android namespace
+        ns = "{http://schemas.android.com/apk/res/android}"
+        
+        # Find all uses-permission elements
+        removed = []
+        for elem in root.findall(".//"):
+            if elem.tag.endswith("uses-permission") or elem.tag.endswith("uses-permission-sdk-23"):
+                perm_name = elem.get(f"{ns}name")
+                if perm_name and perm_name not in allowlist:
+                    root.remove(elem)
+                    removed.append(perm_name)
+        
+        if not removed:
+            print("  ✅ No permissions to remove")
+            return True
+        
+        print(f"  → Removed {len(removed)} permissions")
+        for p in removed[:10]:
+            print(f"     - {p}")
+        if len(removed) > 10:
+            print(f"     ... and {len(removed) - 10} more")
+        
+        # 3. Write modified manifest
+        print("  → Writing modified manifest...")
+        tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
+        
+        # 4. Rebuild with apktool
+        print("  → Rebuilding with apktool...")
+        subprocess.run(
+            ["apktool", "b", decoded_dir, "-o", stripped_apk, "--use-aapt2"],
+            check=True, capture_output=True, text=True
+        )
+        
+        # 5. Zipalign
+        print("  → Running zipalign...")
+        subprocess.run(
+            ["zipalign", "-f", "-p", "4", stripped_apk, aligned_apk],
+            check=True, capture_output=True, text=True
+        )
+        
+        # 6. Re-sign with apksigner
+        print("  → Re-signing with apksigner...")
+        subprocess.run(
+            [
+                "apksigner", "sign",
+                "--ks", ks_path,
+                "--ks-key-alias", ks_alias,
+                "--ks-pass", f"pass:{ks_password}",
+                "--key-pass", f"pass:{ks_key_password}",
+                "--out", apk_path,
+                aligned_apk
+            ],
+            check=True, capture_output=True, text=True
+        )
+        
+        # 7. Verify with aapt
+        print("  → Verifying permissions...")
+        result = subprocess.run(
+            ["aapt", "dump", "permissions", apk_path],
+            capture_output=True, text=True
+        )
+        
+        lines = result.stdout.splitlines()
+        final_perms = [line.strip() for line in lines if line.startswith("uses-permission:")]
+        final_perms = [p.split("'")[1] if "'" in p else p for p in final_perms]
+        
+        violations = [p for p in final_perms if p not in allowlist]
+        if violations:
+            print(f"  ⚠️ WARNING: {len(violations)} non-allowlisted permissions still present:")
+            for v in violations[:5]:
+                print(f"     - {v}")
+        else:
+            print(f"  ✅ Permission stripping successful! Only {len(final_perms)} permissions remain.")
+        
+        # Cleanup
+        shutil.rmtree(decoded_dir, ignore_errors=True)
+        for f in [stripped_apk, aligned_apk]:
+            if os.path.exists(f):
+                os.remove(f)
+        
+        return True
+        
+    except subprocess.CalledProcessError as e:
+        print(f"  ⚠️ Permission stripping failed: {e}")
+        print(f"     stdout: {e.stdout[:500] if e.stdout else 'N/A'}")
+        print(f"     stderr: {e.stderr[:500] if e.stderr else 'N/A'}")
+        print("  → Keeping original patched APK (without permission stripping)")
+        for path in [decoded_dir, stripped_apk, aligned_apk]:
+            if os.path.exists(path):
+                if os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    os.remove(path)
+        return False
+    except Exception as e:
+        print(f"  ⚠️ Permission stripping error: {e}")
+        print("  → Keeping original patched APK")
+        return False
+
 def build_extra_app(app, alias, ks_fp, notes):
     aid = app["id"]
     spec = app["apk"]
@@ -1010,7 +1135,6 @@ def build_extra_app(app, alias, ks_fp, notes):
         out = f"build/out_{safe_name(vid)}.apk"
         ok, applied, dropped, missing = heal_patch(bp, out, gen, per_bundle, vid, alias, mpps, keep_all_abis)
 
-        # Resolve the real version for apps fetched as "latest" (apkeep / scrapers)
         if (not ver) or ver.lower() == "latest":
             ver = DETECTED_VERSIONS.get(vid, ver)
 
@@ -1030,141 +1154,6 @@ def build_extra_app(app, alias, ks_fp, notes):
             notes.append(note)
         else: notes.append(f"## {vid}\nStatus: Failed\n\n")
 
-def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_alias, ks_key_password):
-    """
-    Permanently strip permissions from APK manifest using apktool.
-    Returns True if successful, False if failed (but doesn't crash the build).
-    """
-    import xml.etree.ElementTree as ET
-    
-    print(f"\n🔒 Stripping permissions from {os.path.basename(apk_path)}")
-    print(f"Allowlist: {len(allowlist)} permissions")
-    
-    decoded_dir = "build/apktool_decoded"
-    stripped_apk = "build/stripped_unsigned.apk"
-    aligned_apk = "build/stripped_aligned.apk"
-    
-    try:
-        # 1. Decode with apktool (no smali, just resources)
-        print("  → Decoding with apktool...")
-        if os.path.exists(decoded_dir):
-            shutil.rmtree(decoded_dir)
-        subprocess.run(
-            ["apktool", "d", apk_path, "-o", decoded_dir, "-f", "--no-src"],
-            check=True, capture_output=True, text=True
-        )
-        
-        # 2. Parse and edit manifest
-        manifest_path = os.path.join(decoded_dir, "AndroidManifest.xml")
-        if not os.path.exists(manifest_path):
-            print("  ⚠️ AndroidManifest.xml not found, skipping permission strip")
-            return False
-        
-        print("  → Parsing AndroidManifest.xml...")
-        tree = ET.parse(manifest_path)
-        root = tree.getroot()
-        
-        # Android namespace
-        ns = "{http://schemas.android.com/apk/res/android}"
-        
-        # Find all uses-permission elements
-        removed = []
-        for elem in root.findall(".//"):
-            if elem.tag.endswith("uses-permission") or elem.tag.endswith("uses-permission-sdk-23"):
-                perm_name = elem.get(f"{ns}name")
-                if perm_name and perm_name not in allowlist:
-                    root.remove(elem)
-                    removed.append(perm_name)
-        
-        if not removed:
-            print("  ✅ No permissions to remove")
-            return True
-        
-        print(f"  → Removed {len(removed)} permissions")
-        for p in removed[:10]:  # Show first 10
-            print(f"     - {p}")
-        if len(removed) > 10:
-            print(f"     ... and {len(removed) - 10} more")
-        
-        # 3. Write modified manifest
-        print("  → Writing modified manifest...")
-        tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
-        
-        # 4. Rebuild with apktool
-        print("  → Rebuilding with apktool...")
-        subprocess.run(
-            ["apktool", "b", decoded_dir, "-o", stripped_apk, "--use-aapt2"],
-            check=True, capture_output=True, text=True
-        )
-        
-        # 5. Zipalign
-        print("  → Running zipalign...")
-        subprocess.run(
-            ["zipalign", "-f", "-p", "4", stripped_apk, aligned_apk],
-            check=True, capture_output=True, text=True
-        )
-        
-        # 6. Re-sign with apksigner
-        print("  → Re-signing with apksigner...")
-        subprocess.run(
-            [
-                "apksigner", "sign",
-                "--ks", ks_path,
-                "--ks-key-alias", ks_alias,
-                "--ks-pass", f"pass:{ks_password}",
-                "--key-pass", f"pass:{ks_key_password}",
-                "--out", apk_path,  # Overwrite original patched APK
-                aligned_apk
-            ],
-            check=True, capture_output=True, text=True
-        )
-        
-        # 7. Verify with aapt
-        print("  → Verifying permissions...")
-        result = subprocess.run(
-            ["aapt", "dump", "permissions", apk_path],
-            capture_output=True, text=True
-        )
-        
-        # Parse aapt output to confirm only allowlisted permissions remain
-        lines = result.stdout.splitlines()
-        final_perms = [line.strip() for line in lines if line.startswith("uses-permission:")]
-        final_perms = [p.split("'")[1] if "'" in p else p for p in final_perms]
-        
-        violations = [p for p in final_perms if p not in allowlist]
-        if violations:
-            print(f"  ⚠️ WARNING: {len(violations)} non-allowlisted permissions still present:")
-            for v in violations[:5]:
-                print(f"     - {v}")
-        else:
-            print(f"  ✅ Permission stripping successful! Only {len(final_perms)} permissions remain.")
-        
-        # Cleanup
-        shutil.rmtree(decoded_dir, ignore_errors=True)
-        for f in [stripped_apk, aligned_apk]:
-            if os.path.exists(f):
-                os.remove(f)
-        
-        return True
-        
-    except subprocess.CalledProcessError as e:
-        print(f"  ⚠️ Permission stripping failed: {e}")
-        print(f"     stdout: {e.stdout[:500]}")
-        print(f"     stderr: {e.stderr[:500]}")
-        print("  → Keeping original patched APK (without permission stripping)")
-        # Cleanup on failure
-        for path in [decoded_dir, stripped_apk, aligned_apk]:
-            if os.path.exists(path):
-                if os.path.isdir(path):
-                    shutil.rmtree(path, ignore_errors=True)
-                else:
-                    os.remove(path)
-        return False
-    except Exception as e:
-        print(f"  ⚠️ Permission stripping error: {e}")
-        print("  → Keeping original patched APK")
-        return False
-
 def main():
     # ==========================================
     # 🚀 CUSTOM BUILD MODE (Web Form Override) 🚀
@@ -1179,11 +1168,16 @@ def main():
             "protonmail": "ch.protonmail.android", "protonvpn": "ch.protonvpn.android", "brave": "com.brave.browser"
         }
 
-        # ---- Optional profile load: repo profiles/ first, then custom-profiles release tag ----
         profile_name = os.environ.get("CUSTOM_PROFILE", "").strip()
         profile, profile_src = None, None
         if profile_name:
-            for p in (f"profiles/{profile_name}.yaml", f"profiles/{profile_name}.yml"):
+            base = profile_name
+            if base.lower().endswith((".yaml", ".yml")):
+                base = base.rsplit(".", 1)[0]
+            cand_paths = [f"profiles/{base}.yaml", f"profiles/{base}.yml"]
+            if f"profiles/{profile_name}" not in cand_paths:
+                cand_paths.append(f"profiles/{profile_name}")
+            for p in cand_paths:
                 if os.path.exists(p):
                     with open(p) as f: profile = yaml.safe_load(f) or {}
                     profile_src = f"repo:{p}"
@@ -1193,9 +1187,10 @@ def main():
                 if own_repo:
                     try:
                         rel = gh_api_get(f"https://api.github.com/repos/{own_repo}/releases/tags/custom-profiles").json()
+                        cand_names = {f"{base}.yaml", f"{base}.yml", profile_name}
                         for a in rel.get("assets", []):
-                            if a.get("name", "") in (f"{profile_name}.yaml", f"{profile_name}.yml"):
-                                pdest = f".profile_tmp_{safe_name(profile_name)}.yaml"
+                            if a.get("name", "") in cand_names:
+                                pdest = f".profile_tmp_{safe_name(base)}.yaml"
                                 download_file(a["browser_download_url"], pdest)
                                 with open(pdest) as f: profile = yaml.safe_load(f) or {}
                                 profile_src = "release-tag:custom-profiles"
@@ -1205,9 +1200,9 @@ def main():
             if profile is None:
                 print(f"❌ ERROR: profile '{profile_name}' not found in profiles/ nor on release tag 'custom-profiles'")
                 raise SystemExit(1)
+            profile_name = base
             print(f"📄 Using profile '{profile_name}' from {profile_src}")
 
-        # ---- Resolve knobs: form > profile > defaults ----
         ver = os.environ.get("CUSTOM_VER", "").strip() or str((profile or {}).get("apk_version", "") or "").strip() or "latest"
         src_form = os.environ.get("CUSTOM_SOURCE", "profile-default").strip()
         source_choice = src_form if src_form not in ("", "profile-default") else str((profile or {}).get("source", "auto") or "auto")
@@ -1220,7 +1215,6 @@ def main():
         upload_first_apps = ["tiktok", "youtube", "ytmusic", "google", "gemini"]
         source = "upload" if (source_choice == "auto" and app_id in upload_first_apps) else ("apkeep" if source_choice == "auto" else source_choice)
 
-        # ---- Bundles / allow-lists / options: profile baseline, form overrides ----
         bundles_cfg, options_cfg = [], {}
         global_inc = [clean_name(p) for p in os.environ.get("CUSTOM_INCLUDE", "").split(",") if clean_name(p)]
         if profile:
@@ -1301,6 +1295,26 @@ def main():
         notes = []
         for app in config.get("extra_apps", []):
             build_extra_app(app, alias, ks_fp, notes)
+        
+        # 🔒 Permission stripping (profile-only feature)
+        if profile and profile.get("strip_permissions"):
+            allowlist = profile["strip_permissions"]
+            patched_apks = glob.glob("build/*-patched.apk")
+            if patched_apks:
+                apk_path = patched_apks[0]
+                ks_path = "signing/keystore.jks"
+                ks_password = os.environ.get("KEYSTORE_PASSWORD", "")
+                ks_alias = alias
+                ks_key_password = os.environ.get("KEY_PASSWORD", "")
+                
+                success = strip_permissions_from_apk(
+                    apk_path, allowlist, ks_path, ks_password, ks_alias, ks_key_password
+                )
+                
+                if success:
+                    notes.insert(0, "## Permission Stripping\n✅ Permissions stripped successfully. Only allowlisted permissions remain.\n\n")
+                else:
+                    notes.insert(0, "## Permission Stripping\n⚠️ Permission stripping failed. Original patched APK kept.\n\n")
 
         head = "# Custom Build Release\n\n"
         if profile_name: head += f"Profile: {profile_name} (from {profile_src})\n\n"
@@ -1315,11 +1329,11 @@ def main():
             raise SystemExit(1)
 
         print("✅ Custom build successful!")
-        return  # Exit main early, skip batch logic
+        return
+
     # ==========================================
     # 📦 STANDARD BATCH MODE (config.yaml) 📦
     # ==========================================
-
     with open("config.yaml", "r") as f: config = yaml.safe_load(f)
     if os.path.exists("build"): shutil.rmtree("build")
     if os.path.exists("bundles"): shutil.rmtree("bundles")
@@ -1444,7 +1458,6 @@ def main():
     for app in config.get("extra_apps", []): build_extra_app(app, alias, ks_fp, notes)
     with open("release_notes.md", "w") as f: f.write("# Morphe AutoBuilds Release\n\n" + "".join(notes))
 
-    # CRITICAL: fail loudly if nothing was built
     if not glob.glob("build/*-patched.apk"):
         print("\n" + "=" * 60)
         print("❌ FATAL: No patched APKs were generated!")
