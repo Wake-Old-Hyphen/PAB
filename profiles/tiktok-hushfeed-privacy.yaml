@@ -5,7 +5,7 @@ abi: arm64-v8a
 clone_package: com.tiktok.zixmophe
 app_name: TikTok Privacy
 
-# Permission allowlist: ONLY these permissions will remain
+# Permission allowlist: ONLY these permissions will remain in the final APK
 strip_permissions:
   - android.permission.MODIFY_AUDIO_SETTINGS
   - android.permission.FOREGROUND_SERVICE
@@ -20,4 +20,4 @@ strip_permissions:
 bundles:
   - url: https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json
     label: Hushfeed
-    # patches: (omit = ALL compatible patches)
+    # patches: (omit = ALL compatible patches from Hushfeed)
