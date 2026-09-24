@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: 'Profile name (profiles/<name>.yaml in repo, or <name>.yaml uploaded to the custom-profiles release). Blank = manual mode.'
+        description: 'Profile name (e.g. "youtube-rvx-anddea"). Do NOT add .yaml extension.'
         required: false
         type: string
       app:
@@ -92,6 +92,14 @@ jobs:
 
       - name: Install Python dependencies
         run: pip install requests pyyaml beautifulsoup4 curl_cffi
+
+      - name: Install apktool
+        run: |
+          wget -q https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar -O /tmp/apktool.jar
+          wget -q https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool -O /usr/local/bin/apktool
+          chmod +x /usr/local/bin/apktool
+          mv /tmp/apktool.jar /usr/local/bin/
+          echo "apktool installed: $(apktool --version)"
 
       - name: Decode keystore
         env:
