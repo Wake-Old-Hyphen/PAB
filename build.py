@@ -943,12 +943,12 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
     aligned_apk = "build/stripped_aligned.apk"
     
     try:
-        # 1. Decode with apktool (no smali, just resources)
-        print("  → Decoding with apktool...")
+        # 1. Decode with apktool (no smali, no resources - just manifest)
+        print("  → Decoding with apktool (manifest only)...")
         if os.path.exists(decoded_dir):
             shutil.rmtree(decoded_dir)
         subprocess.run(
-            ["apktool", "d", apk_path, "-o", decoded_dir, "-f", "--no-src"],
+            ["apktool", "d", apk_path, "-o", decoded_dir, "-f", "--no-src", "--no-res"],
             check=True, capture_output=True, text=True
         )
         
@@ -991,7 +991,7 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
         # 4. Rebuild with apktool
         print("  → Rebuilding with apktool...")
         subprocess.run(
-            ["apktool", "b", decoded_dir, "-o", stripped_apk, "--use-aapt2"],
+            ["apktool", "b", decoded_dir, "-o", stripped_apk],
             check=True, capture_output=True, text=True
         )
         
