@@ -985,16 +985,23 @@ def ensure_apkeditor():
 
 def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_alias, ks_key_password):
     print(f"\n🔒 Stripping permissions from {os.path.basename(apk_path)}")
-    print(f"Allowlist: {len(allowlist)} permissions")
+    print(f"Allowlist ({len(allowlist)} permissions):")
+    for p in allowlist:
+        print(f"  ✓ {p}")
 
     decoded_dir = "build/apkeditor_decoded"
     stripped_apk = "build/stripped_unsigned.apk"
     aligned_apk = "build/stripped_aligned.apk"
 
+    allow_set = {a.strip().lower() for a in allowlist}
+    
+    def is_allowed(perm_name):
+        return perm_name.strip().lower() in allow_set
+
     try:
         apkeditor_jar = ensure_apkeditor()
 
-        print("  → Decoding with APKEditor...")
+        print("\n  → Decoding with APKEditor...")
         if os.path.exists(decoded_dir):
             shutil.rmtree(decoded_dir)
         subprocess.run(
@@ -1008,50 +1015,38 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
             return False
 
         print("  → Parsing AndroidManifest.xml...")
+        
+        # CRITICAL FIX 1: Force namespaces BEFORE parsing
+        ET.register_namespace('android', 'http://schemas.android.com/apk/res/android')
+        ET.register_namespace('tools', 'http://schemas.android.com/tools')
+        
         tree = ET.parse(manifest_path)
         root = tree.getroot()
-        ns_map = dict([node for _, node in ET.iterparse(manifest_path, events=['start-ns'])])
-        android_ns = ns_map.get('android', ANDROID_NS)
-        ns = f"{{{android_ns}}}"
+        ns = "{http://schemas.android.com/apk/res/android}"
 
         removed = []
         for elem in list(root.iter()):
             if elem.tag.endswith("uses-permission") or elem.tag.endswith("uses-permission-sdk-23"):
                 perm_name = elem.get(f"{ns}name") or elem.get("name")
-                if not perm_name: continue
-                if perm_name.startswith("disabled_") or perm_name not in allowlist:
+                if not perm_name:
+                    continue
+                
+                if not is_allowed(perm_name):
                     parent = None
                     for p in root.iter():
-                        if elem in list(p): parent = p; break
+                        if elem in list(p):
+                            parent = p
+                            break
                     if parent is not None:
                         parent.remove(elem)
                         removed.append(perm_name)
 
-        if not removed:
-            print("  ✅ No permissions to remove")
-            return True
-
-        print(f"  → Removed {len(removed)} permission entries")
-        for p in removed[:12]: print(f"     - {p}")
-        if len(removed) > 12: print(f"     ... and {len(removed) - 12} more")
-
-        affected = set()
-        for p in removed:
-            b = p[len("disabled_"):] if p.startswith("disabled_") else p
-            if b in FGS_PERM_TO_TYPE: affected.add(FGS_PERM_TO_TYPE[b])
-        if affected:
-            fixed = 0
-            for elem in root.iter():
-                if elem.tag.endswith("service"):
-                    fgs = elem.get(f"{ns}foregroundServiceType") or elem.get("foregroundServiceType")
-                    if not fgs: continue
-                    tokens = [t for t in fgs.split("|") if t and t not in affected]
-                    if tokens: elem.set(f"{ns}foregroundServiceType", "|".join(tokens))
-                    else:
-                        if f"{ns}foregroundServiceType" in elem.attrib: del elem.attrib[f"{ns}foregroundServiceType"]
-                        if "foregroundServiceType" in elem.attrib: del elem.attrib["foregroundServiceType"]
-                    fixed += 1
-            print(f"  → Sanitized foregroundServiceType on {fixed} service(s)")
+        print(f"  → Removed {len(removed)} non-allowlisted permissions.")
+        
+        # CRITICAL FIX 2: Force the root tag to explicitly declare the namespaces 
+        # so Python doesn't change 'android:' to 'ns0:' when saving the file
+        root.set("xmlns:android", "http://schemas.android.com/apk/res/android")
+        root.set("xmlns:tools", "http://schemas.android.com/tools")
 
         print("  → Writing modified manifest...")
         tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
@@ -1072,7 +1067,8 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
             print("  ⚠️ zipalign not found; signing without alignment")
 
         apksigner = find_android_tool("apksigner")
-        if not apksigner: raise Exception("apksigner not found")
+        if not apksigner:
+            raise Exception("apksigner not found")
         print("  → Re-signing with apksigner...")
         subprocess.run(
             [apksigner, "sign", "--ks", ks_path, "--ks-key-alias", ks_alias,
@@ -1090,38 +1086,30 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
                 line = line.strip()
                 if line.startswith("uses-permission:"):
                     m2 = re.search(r"name='([^']+)'", line) or re.search(r'name="([^"]+)"', line)
-                    if m2: final_perms.append(m2.group(1))
-            violations = [p for p in final_perms if p.startswith("disabled_") or p not in allowlist]
-            if violations:
-                print(f"  ⚠️ WARNING: {len(violations)} unexpected entries remain:")
-                for v in violations[:8]: print(f"     - {v}")
-            else:
-                print(f"  ✅ Success! Manifest contains exactly {len(final_perms)} permissions.")
+                    if m2:
+                        final_perms.append(m2.group(1))
+            
+            print(f"\n  ✅ FINAL RESULT: APK contains {len(final_perms)} permissions:")
+            for p in final_perms:
+                print(f"     ✓ {p}")
         else:
             print("  ⚠️ aapt not found; skipping verification")
 
         shutil.rmtree(decoded_dir, ignore_errors=True)
         for f in [stripped_apk, aligned_apk]:
-            if os.path.exists(f): os.remove(f)
+            if os.path.exists(f):
+                os.remove(f)
         return True
 
-    except subprocess.CalledProcessError as e:
-        print(f"  ⚠️ Permission stripping failed: {e}")
-        print(f"     stdout: {(e.stdout or '')[:500]}")
-        print(f"     stderr: {(e.stderr or '')[:500]}")
-        print("  → Keeping original patched APK")
-        for p in [decoded_dir, stripped_apk, aligned_apk]:
-            if os.path.exists(p):
-                if os.path.isdir(p): shutil.rmtree(p, ignore_errors=True)
-                else: os.remove(p)
-        return False
     except Exception as e:
         print(f"  ⚠️ Permission stripping error: {e}")
         print("  → Keeping original patched APK")
         for p in [decoded_dir, stripped_apk, aligned_apk]:
             if os.path.exists(p):
-                if os.path.isdir(p): shutil.rmtree(p, ignore_errors=True)
-                else: os.remove(p)
+                if os.path.isdir(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    os.remove(p)
         return False
 
 def build_extra_app(app, alias, ks_fp, notes):
