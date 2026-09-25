@@ -5,7 +5,7 @@ on:
     inputs:
       versions:
         description: "Comma-separated stock TikTok versions"
-        default: "46.2.3,46.9.3"
+        default: "47.0.3"
 
 permissions:
   contents: read
@@ -43,9 +43,6 @@ jobs:
 
             echo "::group::TikTok $v"
 
-            # 1. Use jq to just print "filename url" on each line
-            # 2. Use grep to find the exact version and ensure it ends in .apk
-            # 3. Use awk to grab the second column (the URL)
             url="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/stock-tiktok-apk" \
               --jq '.assets[] | "\(.name) \(.browser_download_url)"' \
               | grep "com.zhiliaoapp.musically_${v}" \
@@ -85,31 +82,40 @@ jobs:
               echo "# TikTok $v AMOLED candidates"
               echo
 
-              echo "## Known Hushfeed 46.2.3 background colors"
-              for id in a3y a40 a41 a43 a4a; do
+              echo "## 1. Known Hushfeed 47.0.3 background colors (from author's commits)"
+              for id in a3z a41 a42 a44 a4b; do
                 grep -R -n "<color name=\"$id\"" "$d"/res/values* || true
               done
 
               echo
-              echo "## Known Hushfeed sheet style items"
-              for id in agk c3; do
+              echo "## 2. Known Hushfeed 47.0.3 sheet style items (from author's commits)"
+              for id in a24 b79; do
                 grep -R -n "<item name=\"$id\"" "$d"/res/values* || true
               done
+              
+              echo
+              echo "## 3. Layouts related to Friends/Followers/Social (FULL DUMP)"
+              echo "(Look at the root container's android:background or style attribute here)"
+              find "$d/res/layout" -type f \( -iname "*friend*" -o -iname "*follow*" -o -iname "*relation*" -o -iname "*social*" -o -iname "*suggest*" -o -iname "*profile_user*" \) | while read f; do
+                echo "========================================="
+                echo "FILE: $f"
+                echo "========================================="
+                cat "$f"
+                echo
+              done || true
 
               echo
-              echo "## Common dark color resources"
+              echo "## 4. Styles mapping to the new 47.0.3 dark colors"
+              grep -R -nE '<item name="[^"]+">@color/(a3z|a41|a42|a44|a4b)' "$d"/res/values* || true
+
+              echo
+              echo "## 5. Attributes defined as the known sheet colors"
+              grep -R -nE 'name="(a3z|a41|a42|a44|a4b|a24|b79)"' "$d"/res/values* || true
+
+              echo
+              echo "## 6. Common dark color resources (for fallback)"
               grep -R -nE '<color name="[^"]+">#([fF][fF])?(000000|0[0-9a-fA-F]{5}|1[0-9a-fA-F]{5}|2[0-9a-fA-F]{5}|3[0-9a-fA-F]{5}|404040)</color>' \
                 "$d"/res/values* | head -n 2000 || true
-
-              echo
-              echo "## Layout background references, first 2000"
-              grep -R -nE 'android:background="@(color|drawable|style)/[^"]+"' \
-                "$d"/res/layout* | head -n 2000 || true
-
-              echo
-              echo "## Drawable solid color references, first 1000"
-              grep -R -nE '<solid android:color="@(color|style)/[^"]+"' \
-                "$d"/res/drawable* | head -n 1000 || true
 
               echo
               echo
