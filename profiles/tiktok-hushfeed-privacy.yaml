@@ -19,6 +19,6 @@ strip_permissions:
   - android.permission.ACCESS_NETWORK_STATE
 
 bundles:
-  - url: https://raw.githubusercontent.com/Wake-Old-Hyphen/hushfeed/refs/heads/main/patches-bundle.json
+  - url: https://raw.githubusercontent.com/SysAdminDoc/hushfeed/refs/heads/main/patches-bundle.json
     label: Hushfeed
     # patches: (omit = ALL compatible patches from Hushfeed)
