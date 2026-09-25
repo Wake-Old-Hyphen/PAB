@@ -1,4 +1,4 @@
-name: Inspect TikTok AMOLED resources
+name: Inspect TikTok AMOLED resources (V3)
 
 on:
   workflow_dispatch:
@@ -33,41 +33,29 @@ jobs:
       - name: Download and decode stock APKs
         run: |
           set -euo pipefail
-
           IFS=',' read -ra versions <<< "${{ github.event.inputs.versions }}"
           mkdir -p work
 
           for v in "${versions[@]}"; do
             v="$(echo "$v" | tr -d '[:space:]')"
             [ -n "$v" ] || continue
-
             echo "::group::TikTok $v"
-
             url="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/stock-tiktok-apk" \
               --jq '.assets[] | "\(.name) \(.browser_download_url)"' \
               | grep "com.zhiliaoapp.musically_${v}" \
               | grep "\.apk$" \
               | head -n1 \
               | awk '{print $2}' || true)"
-
-            if [ -z "$url" ]; then
-              echo "::error::No uploaded stock APK for $v"
-              exit 1
-            fi
-
+            if [ -z "$url" ]; then echo "::error::No uploaded stock APK for $v"; exit 1; fi
             echo "Downloading TikTok $v..."
             curl -L -H "Authorization: Bearer ${GH_TOKEN}" -o "work/base_${v}.apk" "$url"
-
-            # -s = do not decode source/smali, only decode resources.
             java -Xmx4g -jar apktool.jar d -s -f -o "work/decoded_${v}" "work/base_${v}.apk"
-
             echo "::endgroup::"
           done
 
-      - name: Build AMOLED candidate report
+      - name: Build V3 AMOLED candidate report
         run: |
           set -euo pipefail
-
           IFS=',' read -ra versions <<< "${{ github.event.inputs.versions }}"
           report="amoled-resource-report.txt"
           : > "$report"
@@ -75,55 +63,40 @@ jobs:
           for v in "${versions[@]}"; do
             v="$(echo "$v" | tr -d '[:space:]')"
             [ -n "$v" ] || continue
-
             d="work/decoded_${v}"
 
             {
-              echo "# TikTok $v AMOLED candidates"
+              echo "# TikTok $v V3 AMOLED candidates"
               echo
-
-              echo "## 1. Known Hushfeed 47.0.3 background colors (from author's commits)"
-              for id in a3z a41 a42 a44 a4b; do
-                grep -R -n "<color name=\"$id\"" "$d"/res/values* || true
-              done
-
-              echo
-              echo "## 2. Known Hushfeed 47.0.3 sheet style items (from author's commits)"
-              for id in a24 b79; do
-                grep -R -n "<item name=\"$id\"" "$d"/res/values* || true
-              done
               
-              echo
-              echo "## 3. Layouts related to Friends/Followers/Social (FULL DUMP)"
-              echo "(Look at the root container's android:background or style attribute here)"
-              find "$d/res/layout" -type f \( -iname "*friend*" -o -iname "*follow*" -o -iname "*relation*" -o -iname "*social*" -o -iname "*suggest*" -o -iname "*profile_user*" \) | while read f; do
-                echo "========================================="
-                echo "FILE: $f"
-                echo "========================================="
-                cat "$f"
-                echo
-              done || true
+              echo "## 1. Styles referencing the MISSING #161823 and #1e1e1e colors"
+              echo "(These are likely the background attributes for the Followers sheet)"
+              grep -R -nE '<item name="[^"]+">@color/(bi|cu|da|dd|ff|fu|kn|kp|op|uf|x1|a05|a1o|a5_|a5i|a7b|a7e|a82|a8m|a_g|aa0|aaa|u0|a3_|a3q|a3x)' "$d"/res/values* || true
 
               echo
-              echo "## 4. Styles mapping to the new 47.0.3 dark colors"
-              grep -R -nE '<item name="[^"]+">@color/(a3z|a41|a42|a44|a4b)' "$d"/res/values* || true
+              echo "## 2. Layout XML dumps for known sheet layouts (a24, a4b, b79)"
+              echo "(Look at the root container's android:background or style here)"
+              for layout_name in a24 a4b b79 a3z a41 a42 a44; do
+                f="$d/res/layout/${layout_name}.xml"
+                if [ -f "$f" ]; then
+                  echo "========================================="
+                  echo "FILE: $f"
+                  echo "========================================="
+                  cat "$f"
+                  echo
+                fi
+              done
 
               echo
-              echo "## 5. Attributes defined as the known sheet colors"
-              grep -R -nE 'name="(a3z|a41|a42|a44|a4b|a24|b79)"' "$d"/res/values* || true
+              echo "## 3. All style items with literal dark hex codes (fallback)"
+              grep -R -nE '<item name="[^"]+">#([fF][fF])?(161823|1e1e1e|252525|121212|2e2e2e|212121|181818)</item>' "$d"/res/values* || true
 
-              echo
-              echo "## 6. Common dark color resources (for fallback)"
-              grep -R -nE '<color name="[^"]+">#([fF][fF])?(000000|0[0-9a-fA-F]{5}|1[0-9a-fA-F]{5}|2[0-9a-fA-F]{5}|3[0-9a-fA-F]{5}|404040)</color>' \
-                "$d"/res/values* | head -n 2000 || true
-
-              echo
               echo
             } >> "$report"
           done
 
       - uses: actions/upload-artifact@v4
         with:
-          name: amoled-resource-report
+          name: amoled-resource-report-v3
           path: amoled-resource-report.txt
           retention-days: 14
