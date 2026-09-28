@@ -1,342 +1,320 @@
-auto_include_new_patches: true
-exclude_patches: []
+# ============================================================
+# PAB config v2 — version-sync aware
+# ============================================================
+meta:
+  version: 2
+  resolution_report: true
 
-extra_bundles:
-  - id: "kveld9"
-    url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
+defaults:
+  auto_include_new_patches: true
+  exclude_patches: []
+  abi: arm64-v8a
+  density: ["xxhdpi"]
+  languages: ["en"]
+  keep_all_abis: false
+  version_policy: pin
 
-variants:
-  - id: "brave_origin"
-    type: "stable"
-    output_name: "Brave-Origin-Stable"
-    clone_package: "com.brave.browser"
-    app_name: "Brave Origin"
+# ---------- BUNDLE REGISTRY ----------
+bundles:
+  kveld9:        {url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"}
+  hushfeed:      {url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"}
+  hushfeed-mine: {url: "https://raw.githubusercontent.com/Wake-Old-Hyphen/hushfeed/main/patches-bundle.json"}
+  nai64-extra:   {url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"}
+  morphe:        {url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"}
+  dh6k:          {url: "https://raw.githubusercontent.com/dh6k/morphe-patches/main/patches-bundle.json"}
+  anddea:        {url: "https://raw.githubusercontent.com/anddea/revanced-patches/dev/patches-bundle.json"}
+  adobo:         {url: "https://raw.githubusercontent.com/jkennethcarino/adobo/main/patches-bundle.json"}
+  hxreborn:      {url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"}
+  icysymmetra:   {url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"}
+  rushiranpise:  {url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/main/patches-bundle.json"}
+  kondratjev:    {url: "https://raw.githubusercontent.com/kondratjev/morphe-patches/main/patches-bundle.json"}
+  paresh:        {url: "https://gitlab.com/Paresh-Maheshwari/paresh-patches/-/raw/main/patches-bundle.json"}
+  gemini-microg: {url: "https://raw.githubusercontent.com/ryuya0124/gemini-microg-patches/main/patches-bundle.json"}
 
-  - id: "brave_o2"
-    type: "stable"
-    output_name: "BraveO²-Stable"
-    clone_package: "com.brave.origin"
-    app_name: "BraveO²"
-
-  - id: "brave_nightly"
-    type: "nightly"
-    output_name: "Brave-Nightly"
-    clone_package: ""
-    app_name: ""
-
-  - id: "brave_beta"
-    type: "beta"
-    output_name: "Brave-Beta"
-    clone_package: ""
-    app_name: ""
-
-  - id: "brave_mono"
-    type: "stable"
-    output_name: "Brave-Mono-Stable"
-    clone_package: "com.brave.mono"
-    app_name: "Brave Mono"
-    exact_asset_url: "https://github.com/brave/brave-browser/releases/download/v1.95.101/Bravemonoarm64.apk"
-    exact_patches:
-      "Change app icon":
-        customIcon: "assets/isoamoledbraveicon.png"
-      "Change app name":
-        appName: "Brave Mono"
-      "Disable analytics": {}
-      "Clone app":
-        packageName: "com.brave.mono"
-        updatePermissions: true
-        updateProviders: true
-      "APK Junk Cleaner": {}
-      "Block Brave Telemetry": {}
-      "Brave In-Product & Commercial Notification Optimizer": {}
-      "Brave Origin": {}
-      "Brave Startup Performance Optimization": {}
-      "DPI Resource Slimmer": {}
-      "Disable Background Sync & Periodic Sync": {}
-      "Disable Battery Status API & OS Listener": {}
-      "Locale PAK Slimmer": {}
-      "Locale Resource Slimmer": {}
-      "Native Bloat Slimmer": {}
-      "PNG Asset Optimizer": {}
-      "Skip First Run": {}
-    bundles:
-      - "dh6k"
-      - "official"
-      - "kveld9"
-
-extra_apps:
-  - id: tiktok
-    output_base: "TikTok"
+# ---------- APP REGISTRY ----------
+apps:
+  tiktok:
+    package: com.zhiliaoapp.musically
+    source: {kind: upload, tag: stock-tiktok-apk, fallback: apkmirror}
+    version_policy: latest_available
     density: ["nodpi"]
-    languages: ["en"]
-    apk:
-      source: "upload"
-      package: "com.zhiliaoapp.musically"
-      upload_tag: "stock-tiktok-apk"
-    variants:
-      - id: "TikTok-HXReBorn"
-        apk_version: "46.2.3"
-        bundles:
-          - url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"
-            label: "HXReBorn"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
-
-      - id: "TikTok-Icysymmetra"
-        apk_version: "46.2.3"
-        bundles:
-          - url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"
-            label: "Icysymmetra"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
-
-      - id: "TikTok-Hushfeed"
-        apk_version: "46.2.3"
-        bundles:
-          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
-            label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
-
-      - id: "TikTok-46.7.3-Hushfeed"
-        apk_version: "46.7.3"
-        bundles:
-          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
-            label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
-
-      - id: "TikTok-46.8.3-Hushfeed"
-        apk_version: "46.8.3"
-        bundles:
-          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
-            label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
-
-      - id: "TikTok-46.9.3-Hushfeed"
-        apk_version: "46.9.3"
-        bundles:
-          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
-            label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
-
-      - id: "TikTok-47.0.3-Hushfeed"
-        apk_version: "47.0.3"
-        bundles:
-          - url: "https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json"
-            label: "Hushfeed"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
-
-      - id: "TikTok-46.9.3-Kveld9"
-        apk_version: "46.9.3"
-        bundles:
-          - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
-            label: "Kveld9"
-          - url: "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json"
-            label: "Nai64"
-            patches:
-              - "Empty Clipboard Report"
-
-      - id: "TikTok-46.9.3-Kveld9-Custom"
-        apk_version: "46.9.3"
-        bundles:
-          - url: "https://raw.githubusercontent.com/kveld9/kveld-morphe-patches/main/patches-bundle.json"
-            label: "Kveld9"
-            patches:
-              - "APK Junk Cleaner"
-              - "Bypass Mandatory Login"
-              - "Clean Share URL"
-              - "Client-Side AI & Behavioral Profiling Governor"
-              - "Core Asset De-bloat"
-              - "DPI Resource Slimmer"
-              - "Device Privacy Guard"
-              - "Disable Push Notifications"
-              - "Feed Ad Blocker"
-              - "Feed Bloat & Distraction Blocker"
-              - "Feed Live Stream Blocker"
-              - "Hide TikTok Shop & Mall"
-              - "In-App Browser Privacy Guard"
-              - "Instant Launch & Splash Blocker"
-              - "Language Pack Purger"
-              - "Live Stream 3D Gift Optimizer"
-              - "Live Stream SDK & Minigame De-bloat"
-              - "Locale Resource Slimmer"
-              - "Media Usability & Watermark-Free Downloader"
-              - "P2P Video Relay & Mesh CDN Blocker"
-              - "PNG Asset Optimizer"
-              - "Playback Speed Persistence"
-              - "Resource & Battery Governor"
-              - "SIM Region Selector"
-              - "Skip First-Launch Onboarding"
-              - "Studio & Creation De-bloat"
-              - "Unified Telemetry & Tracker Silencer"
-              - "Update Prompt Suppressor"
-              - "Video Quality Governor"
-        options:
-          "DPI Resource Slimmer":
-            dpi: "xxhdpi"
-          "Language Pack Purger":
-            languages: "en"
-          "Locale Resource Slimmer":
-            locales: "en"
-          "SIM Region Selector":
-            region: "CH"
-          "Video Quality Governor":
-            resolution: "1080"
-
-  - id: youtube
-    output_base: "YouTube"
+  brave:
+    package: com.brave.browser
+    source: {kind: github-releases, repo: brave/brave-browser, assets: ["Bravemonoarm64.apk", "BraveMonoarm.apk"]}
+    version_policy: follow
+  reddit:
+    package: com.reddit.frontpage
+    source: {kind: apkeep, fallback: apkmirror}
+    version_policy: follow
+  youtube:
+    package: com.google.android.youtube
+    source: {kind: upload, tag: stock-tiktok-apk, fallback: apkeep}
     density: ["332dpi", "xhdpi", "xxhdpi"]
-    languages: ["en"]
-    apk:
-      source: "upload"
-      package: "com.google.android.youtube"
-      upload_tag: "stock-tiktok-apk"
-    variants:
-      - id: "YouTube-Morphe"
-        apk_version: "21.13.164"
-        clone_package: "com.yt.zixmophe"
-        bundles:
-          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
-            label: "Morphe"
-
-      - id: "YouTube-Anddea"
-        apk_version: "21.07.247"
-        clone_package: "anddea.youtube.zix"
-        app_name: "YouTube RVX"
-        exclude_patches:
-          - "Spoof signature"
-          - "Change version code"
-        bundles:
-          - url: "https://raw.githubusercontent.com/anddea/revanced-patches/dev/patches-bundle.json"
-            label: "Anddea"
-        options:
-          "Custom branding":
-            appName: "YouTube RVX"
-          "GmsCore support":
-            checkGmsCore: true
-            packageNameYouTube: "anddea.youtube.zix"
-            patchAllManifests: true
-
-  - id: ytmusic
-    output_base: "YouTubeMusic"
+  ytmusic:
+    package: com.google.android.apps.youtube.music
+    source: {kind: upload, tag: stock-tiktok-apk}
     density: ["332dpi", "xhdpi", "xxhdpi"]
-    languages: ["en"]
-    apk:
-      source: "upload"
-      package: "com.google.android.apps.youtube.music"
-      upload_tag: "stock-tiktok-apk"
-    variants:
-      - id: "YouTubeMusic-Morphe"
-        apk_version: "9.15.51"
-        clone_package: "com.yt.muzik.zixmophe"
-        bundles:
-          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
-            label: "Morphe"
-
-  - id: google
-    output_base: "Google"
+  google:
+    package: com.google.android.googlequicksearchbox
+    source: {kind: upload, tag: stock-tiktok-apk}
     density: ["332dpi", "xhdpi", "xxhdpi"]
-    languages: ["en"]
     keep_all_abis: true
-    apk:
-      source: "upload"
-      package: "com.google.android.googlequicksearchbox"
-      upload_tag: "stock-tiktok-apk"
-    variants:
-      - id: "Google-microG"
-        apk_version: "17.54.18"
-        clone_package: "com.google.android.googlequicksearchbox.morphe"
-        bundles:
-          - url: "https://raw.githubusercontent.com/ryuya0124/gemini-microg-patches/main/patches-bundle.json"
-            label: "GeminiMicroG"
-          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
-            label: "Morphe"
-
-  - id: gemini
-    output_base: "Gemini"
+  gemini:
+    package: com.google.android.apps.bard
+    source: {kind: upload, tag: stock-tiktok-apk}
     density: ["332dpi", "xhdpi", "xxhdpi"]
-    languages: ["en"]
     keep_all_abis: true
-    apk:
-      source: "upload"
-      package: "com.google.android.apps.bard"
-      upload_tag: "stock-tiktok-apk"
-    variants:
-      - id: "Gemini-microG"
-        apk_version: "1.0.958859967"
-        clone_package: "com.google.android.apps.bard.morphe"
-        bundles:
-          - url: "https://raw.githubusercontent.com/ryuya0124/gemini-microg-patches/main/patches-bundle.json"
-            label: "GeminiMicroG"
-          - url: "https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-bundle.json"
-            label: "Morphe"
+  windscribe: {package: com.windscribe.vpn,    source: {kind: apkeep}, version_policy: latest, density: ["332dpi", "xhdpi", "xxhdpi"]}
+  protonmail: {package: ch.protonmail.android, source: {kind: apkeep}, version_policy: latest, density: ["332dpi", "xhdpi", "xxhdpi"]}
+  protonvpn:  {package: ch.protonvpn.android,  source: {kind: apkeep}, version_policy: latest, density: ["332dpi", "xhdpi", "xxhdpi"]}
 
-  - id: windscribe
-    output_base: "Windscribe"
-    density: ["332dpi", "xhdpi", "xxhdpi"]
-    languages: ["en"]
-    apk:
-      source: "apkeep"
-      package: "com.windscribe.vpn"
-    variants:
-      - id: "Windscribe-MicroG"
-        bundles:
-          - url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/main/patches-bundle.json"
-            label: "Rushiranpise"
-            patches:
-              - "GmsCore support (MicroG)"
-              - "Unlock Premium"
+# ---------- BUILD LIST ----------
+builds:
+  # ===== Brave =====
+  - id: brave-origin-stable
+    app: brave
+    version: "channel:stable"
+    output_name: Brave-Origin-Stable
+    clone: com.brave.browser
+    name: Brave Origin
+    bundles: [dh6k, morphe]
 
-  - id: protonmail
-    output_base: "ProtonMail"
-    density: ["332dpi", "xhdpi", "xxhdpi"]
-    languages: ["en"]
-    apk:
-      source: "apkeep"
-      package: "ch.protonmail.android"
-    variants:
-      - id: "ProtonMail-Patched"
-        bundles:
-          - url: "https://raw.githubusercontent.com/hxreborn/morphe-patches/main/patches-bundle.json"
-            label: "HXReborn"
+  - id: brave-o2
+    app: brave
+    version: "channel:stable"
+    output_name: BraveO2-Stable
+    clone: com.brave.origin
+    name: BraveO²
+    bundles: [dh6k, morphe]
 
-  - id: protonvpn
-    output_base: "ProtonVPN"
-    density: ["332dpi", "xhdpi", "xxhdpi"]
-    languages: ["en"]
-    apk:
-      source: "apkeep"
-      package: "ch.protonvpn.android"
-    variants:
-      - id: "ProtonVPN-Patched"
-        bundles:
-          - url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/main/patches-bundle.json"
-            label: "Rushiranpise"
-            patches:
-              - "Unlock VPN Plus"
-          - url: "https://raw.githubusercontent.com/kondratjev/morphe-patches/main/patches-bundle.json"
-            label: "Kondratjev"
-            patches:
-              - "Disable analytics"
-          - url: "https://gitlab.com/Paresh-Maheshwari/paresh-patches/-/raw/main/patches-bundle.json"
-            label: "Paresh"
-            patches:
-              - "Disable telemetry"
+  - id: brave-nightly
+    app: brave
+    version: "channel:nightly"
+    output_name: Brave-Nightly
+    bundles: [dh6k, morphe]
+
+  - id: brave-beta
+    app: brave
+    version: "channel:beta"
+    output_name: Brave-Beta
+    bundles: [dh6k, morphe]
+
+  - id: brave-mono
+    app: brave
+    version: follow                      # ← follows kveld9's declared Brave target forever
+    clone: com.brave.mono
+    name: Brave Mono
+    bundles:
+      - kveld9:
+          authority: true
+          patches: &mono_patches
+            - Brave Origin
+            - Block Brave Telemetry
+            - Clean New Tab Page
+            - Suppress In-App Promos & Surveys
+            - Brave In-Product & Commercial Notification Optimizer
+            - Clean Share URL
+            - Disable Background Sync & Periodic Sync
+            - Disable Battery Status API & OS Listener
+            - Brave Startup Performance Optimization
+            - Sensor Privacy Guard
+            - Skip First Run
+            - Native Bloat Slimmer
+            - Locale PAK Slimmer
+            - Change app icon
+            - Change app name
+            - Clone app
+            - Disable analytics
+            - APK Junk Cleaner
+            - DPI Resource Slimmer
+            - Locale Resource Slimmer
+            - PNG Asset Optimizer
+      - dh6k:   {patches: *mono_patches}
+      - morphe: {patches: *mono_patches}
+    options:
+      "Clean New Tab Page": {hideTopSites: true}
+      "Locale PAK Slimmer": {locales: "en-US"}
+      "Change app icon": {customIcon: "assets/isoamoledbraveicon.png"}
+
+  # ===== TikTok =====
+  - id: tiktok-hushfeed
+    app: tiktok
+    version: latest_available            # highest hushfeed-supported version you uploaded
+    bundles:
+      - hushfeed: {authority: true}
+      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+
+  - id: tiktok-kveld9
+    app: tiktok
+    version: latest_available
+    bundles:
+      - kveld9: {authority: true}
+      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+
+  - id: tiktok-kveld9-custom
+    app: tiktok
+    version: "47.0.3"
+    bundles:
+      - kveld9:
+          authority: true
+          patches:
+            - APK Junk Cleaner
+            - Bypass Mandatory Login
+            - Clean Share URL
+            - Client-Side AI & Behavioral Profiling Governor
+            - Core Asset De-bloat
+            - DPI Resource Slimmer
+            - Device Privacy Guard
+            - Disable Push Notifications
+            - Feed Ad Blocker
+            - Feed Bloat & Distraction Blocker
+            - Feed Live Stream Blocker
+            - Hide TikTok Shop & Mall
+            - In-App Browser Privacy Guard
+            - Instant Launch & Splash Blocker
+            - Language Pack Purger
+            - Live Stream 3D Gift Optimizer
+            - Live Stream SDK & Minigame De-bloat
+            - Locale Resource Slimmer
+            - Media Usability & Watermark-Free Downloader
+            - P2P Video Relay & Mesh CDN Blocker
+            - PNG Asset Optimizer
+            - Playback Speed Persistence
+            - Resource & Battery Governor
+            - SIM Region Selector
+            - Skip First-Launch Onboarding
+            - Studio & Creation De-bloat
+            - Unified Telemetry & Tracker Silencer
+            - Update Prompt Suppressor
+            - Video Quality Governor
+    options:
+      "DPI Resource Slimmer": {dpi: "xxhdpi"}
+      "Language Pack Purger": {languages: "en"}
+      "Locale Resource Slimmer": {locales: "en"}
+      "SIM Region Selector": {region: "CH"}
+      "Video Quality Governor": {resolution: "1080"}
+
+  - id: tiktok-privacy
+    app: tiktok
+    version: "47.0.3"
+    profile: tiktok-hushfeed-privacy     # batch now applies its strip_permissions too
+    clone: com.tiktok.zixmophe
+    name: TikTok Privacy
+    bundles:
+      - hushfeed-mine: {authority: true}
+
+  - id: tiktok-46.2.3-hxreborn
+    app: tiktok
+    version: "46.2.3"
+    bundles:
+      - hxreborn: {authority: true}
+      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+
+  - id: tiktok-46.2.3-icysymmetra
+    app: tiktok
+    version: "46.2.3"
+    bundles:
+      - icysymmetra: {authority: true}
+      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+
+  - id: tiktok-46.2.3-hushfeed
+    app: tiktok
+    version: "46.2.3"
+    bundles:
+      - hushfeed: {authority: true}
+      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+
+  - id: tiktok-46.7.3-hushfeed
+    app: tiktok
+    version: "46.7.3"
+    bundles:
+      - hushfeed: {authority: true}
+      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+
+  - id: tiktok-46.8.3-hushfeed
+    app: tiktok
+    version: "46.8.3"
+    bundles:
+      - hushfeed: {authority: true}
+      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+
+  - id: tiktok-46.9.3-hushfeed
+    app: tiktok
+    version: "46.9.3"
+    bundles:
+      - hushfeed: {authority: true}
+      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+
+  # ===== Reddit (single-authority pair — no intersection stall) =====
+  - id: reddit-morphe
+    app: reddit
+    version: follow
+    clone: com.reddit.zixmophe
+    name: RDZ
+    bundles:
+      - morphe: {authority: true}
+
+  - id: reddit-adobo
+    app: reddit
+    version: follow
+    clone: com.reddit.zixadobo           # identity option A (coexist); change to com.reddit.zixmophe/RDZ for option B
+    name: RDZ Adobo
+    bundles:
+      - adobo: {authority: true}
+
+  # ===== YouTube family =====
+  - id: youtube-morphe
+    app: youtube
+    version: "21.13.164"
+    clone: com.yt.zixmophe
+    bundles: [morphe]
+
+  - id: youtube-anddea
+    app: youtube
+    version: "21.07.247"
+    clone: anddea.youtube.zix
+    name: YouTube RVX
+    exclude: ["Spoof signature", "Change version code"]
+    bundles:
+      - anddea: {authority: true}
+    options:
+      "Custom branding": {appName: "YouTube RVX"}
+      "GmsCore support": {checkGmsCore: true, packageNameYouTube: "anddea.youtube.zix", patchAllManifests: true}
+
+  - id: ytmusic-morphe
+    app: ytmusic
+    version: "9.15.51"
+    clone: com.yt.muzik.zixmophe
+    bundles: [morphe]
+
+  - id: google-microg
+    app: google
+    version: "17.54.18"
+    clone: com.google.android.googlequicksearchbox.morphe
+    bundles: [gemini-microg, morphe]
+
+  - id: gemini-microg
+    app: gemini
+    version: "1.0.958859967"
+    clone: com.google.android.apps.bard.morphe
+    bundles: [gemini-microg, morphe]
+
+  # ===== VPN / Mail =====
+  - id: windscribe-microg
+    app: windscribe
+    version: latest
+    bundles:
+      - rushiranpise: {patches: ["GmsCore support (MicroG)", "Unlock Premium"]}
+
+  - id: protonmail-patched
+    app: protonmail
+    version: latest
+    bundles: [hxreborn]
+
+  - id: protonvpn-patched
+    app: protonvpn
+    version: latest
+    bundles:
+      - rushiranpise: {patches: ["Unlock VPN Plus"]}
+      - kondratjev: {patches: ["Disable analytics"]}
+      - paresh: {patches: ["Disable telemetry"]}
