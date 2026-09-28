@@ -11,6 +11,7 @@ import tarfile
 import zipfile
 import hashlib
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 from urllib.parse import quote_plus, urljoin
 
@@ -45,6 +46,11 @@ UA = {
 RAW_CACHE = {}
 BASE_CACHE = {}
 DETECTED_VERSIONS = {}
+RESOLUTION = []
+DECLARED_CACHE = {}
+TAGS_CACHE = {}
+UPLOAD_CACHE = {}
+SCHEMA = 2
 
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 ET.register_namespace("android", ANDROID_NS)
@@ -84,6 +90,250 @@ def norm_key(s): return re.sub(r"[^a-z0-9]", "", (s or "").lower())
 def safe_name(s): return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(s))
 def clean_name(p): return re.sub(r"\s+", " ", (p or "")).strip()
 
+# ============================================================
+# CONFIG v2 LOADER (legacy-compatible)
+# ============================================================
+def normalize_bundle_url(url):
+    u = (url or "").strip()
+    m = re.match(r"^https?://(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", u)
+    if m:
+        return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/main/patches-bundle.json"
+    m = re.match(r"^https?://(?:www\.)?github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+?)/?$", u)
+    if m:
+        return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/{m.group(3)}/{m.group(4)}"
+    return u
+
+def repo_from_url(url):
+    for pat in [r"raw\.githubusercontent\.com/([^/]+/[^/]+)/", r"github\.com/([^/]+/[^/]+)/", r"bundle/([^/]+/[^/]+)/", r"gitlab\.com/([^/]+/[^/]+)/"]:
+        m = re.search(pat, url)
+        if m: return m.group(1)
+    return None
+
+def _expand_bundle(ref, registry):
+    if isinstance(ref, str): bid, opts = ref, {}
+    elif isinstance(ref, dict):
+        if "url" in ref:
+            b = {"url": normalize_bundle_url(ref["url"])}
+            b["label"] = ref.get("label") or (repo_from_url(b["url"]) or "/x").split("/")[-1]
+            for k in ("patches", "options", "pin", "authority"):
+                if k in ref: b[k] = ref[k]
+            return b
+        bid = list(ref.keys())[0]; opts = ref[bid] or {}
+    else: return None
+    src = registry.get(bid) or {}
+    b = {"url": src.get("url", ""), "label": src.get("label") or bid}
+    for k in ("patches", "options", "pin", "authority"):
+        if k in opts: b[k] = opts[k]
+        elif k in src: b[k] = src[k]
+    return b if b.get("url") else None
+
+def normalize_v2(raw):
+    d = raw.get("defaults") or {}
+    registry = {}
+    for bid, b in (raw.get("bundles") or {}).items():
+        b = b if isinstance(b, dict) else {"url": b}
+        entry = {"url": normalize_bundle_url(b.get("url", "")), "label": b.get("label") or bid}
+        for k in ("patches", "options", "pin", "authority"):
+            if k in b: entry[k] = b[k]
+        registry[bid] = entry
+    apps = raw.get("apps") or {}
+    cfg = {"auto_include_new_patches": d.get("auto_include_new_patches", True),
+           "exclude_patches": d.get("exclude_patches", []), "extra_bundles": {},
+           "variants": [], "extra_apps": [], "_v2": True, "_defaults": d, "_registry": registry}
+    apps_out = {}
+    for bd in raw.get("builds") or []:
+        app_id = bd.get("app"); app = apps.get(app_id) or {}
+        bundles = [x for x in (_expand_bundle(r, registry) for r in bd.get("bundles") or []) if x]
+        ver = str(bd.get("version") or app.get("version_policy") or d.get("version_policy") or "pin")
+        common = {"id": bd.get("id") or f"{app_id}-{len(bundles)}", "bundles": bundles,
+                  "clone_package": bd.get("clone") or app.get("clone") or "",
+                  "app_name": bd.get("name") or app.get("name") or "",
+                  "exclude_patches": bd.get("exclude") or [], "options": bd.get("options") or {},
+                  "apk_version": ver, "_policy": ver,
+                  "_authorities": [b["label"] for b in bundles if b.get("authority")]}
+        if bd.get("profile"): common["_profile"] = bd["profile"]
+        if ver.startswith("channel:"):
+            e = dict(common); e["type"] = ver.split(":", 1)[1]
+            e["output_name"] = bd.get("output_name") or common["id"]
+            cfg["variants"].append(e)
+            continue
+        src = app.get("source") or {}
+        kind = src.get("kind", "apkeep")
+        apk = {"source": {"upload": "upload", "apkeep": "apkeep", "github-releases": "github-rel"}.get(kind, kind),
+               "package": app.get("package", ""), "arch": app.get("arch", "arm64-v8a"),
+               "upload_tag": src.get("tag", ""), "gh_repo": src.get("repo", ""),
+               "gh_assets": src.get("assets") or [], "fallback": src.get("fallback", "")}
+        ae = apps_out.setdefault(app_id, {
+            "id": app_id, "output_base": app.get("output_base") or app_id.title(),
+            "density": app.get("density") or d.get("density") or ["xxhdpi"],
+            "languages": app.get("languages") or d.get("languages") or ["en"],
+            "keep_all_abis": app.get("keep_all_abis", d.get("keep_all_abis", False)),
+            "apk": apk, "variants": []})
+        ae["variants"].append(common)
+    cfg["extra_apps"] = list(apps_out.values())
+    return cfg
+
+def normalize_legacy(raw):
+    cfg = dict(raw)
+    cfg.setdefault("auto_include_new_patches", True)
+    cfg.setdefault("exclude_patches", [])
+    cfg.setdefault("extra_bundles", {})
+    cfg.setdefault("variants", [])
+    cfg.setdefault("extra_apps", [])
+    for v in cfg["variants"]:
+        v["_policy"] = "channel:" + v.get("type", "stable")
+    for ae in cfg["extra_apps"]:
+        for v in ae.get("variants", []):
+            v.setdefault("_policy", str(v.get("apk_version") or "latest"))
+            v.setdefault("_authorities", [b.get("label") for b in v.get("bundles", []) if b.get("authority")])
+    return cfg
+
+def load_config(path="config.yaml"):
+    with open(path) as f: raw = yaml.safe_load(f) or {}
+    if "builds" in raw or (raw.get("meta") or {}).get("version") == 2:
+        return normalize_v2(raw)
+    return normalize_legacy(raw)
+
+# ============================================================
+# VERSION RESOLUTION
+# ============================================================
+def parse_patches_info(bundles):
+    cmd = ["java", "-jar", "build/cli.jar", "list-patches"]
+    for b in bundles: cmd += ["-p", b]
+    cmd += ["--with-packages", "--with-options", "--with-versions"]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    info, cur, pending_required, cur_pkg = [], None, False, None
+    for rawline in r.stdout.splitlines():
+        line = rawline.strip()
+        if line.startswith("Index:"):
+            cur = {"name": None, "packages": [], "required_opts": [], "last_key": None, "versions": {}}
+            info.append(cur); cur_pkg = None
+        elif cur is None: continue
+        elif line.startswith("Name:"): cur["name"] = line.split(":", 1)[1].strip()
+        elif line.startswith("Package name:"):
+            val = line.split(":", 1)[1].strip()
+            mpar = re.search(r"\(([^)]*)\)", val)
+            if mpar:
+                vs = {v.strip() for v in mpar.group(1).split(",") if v.strip()}
+                val = val[:mpar.start()].strip()
+                if vs: cur["versions"].setdefault(val, set()).update(vs)
+            cur_pkg = val
+            cur["packages"].append(val)
+        elif line.startswith("Supported versions:"):
+            vs = {v.strip() for v in line.split(":", 1)[1].split(",") if v.strip()}
+            tgt = cur_pkg or (cur["packages"][-1] if cur["packages"] else None)
+            if tgt and vs: cur["versions"].setdefault(tgt, set()).update(vs)
+        elif line.startswith("Key:"):
+            cur["last_key"] = line.split(":", 1)[1].strip()
+            if pending_required: cur["required_opts"].append(cur["last_key"]); pending_required = False
+        elif line.startswith("Required:"):
+            req = line.split(":", 1)[1].strip().lower() == "true"
+            if req and cur.get("last_key"): cur["required_opts"].append(cur["last_key"])
+            else: pending_required = req
+    return [x for x in info if x.get("name")]
+
+def declared_versions(mpp, package):
+    key = (mpp, package)
+    if key in DECLARED_CACHE: return DECLARED_CACHE[key]
+    vers = set()
+    for p in parse_patches_info([mpp]):
+        for pkg, vs in (p.get("versions") or {}).items():
+            if pkg == package: vers |= vs
+    DECLARED_CACHE[key] = vers
+    return vers
+
+def github_tags(repo):
+    if repo not in TAGS_CACHE:
+        try:
+            rels = gh_api_get(f"https://api.github.com/repos/{repo}/releases?per_page=100").json()
+            TAGS_CACHE[repo] = {(r.get("tag_name") or "").lower().lstrip("v") for r in rels}
+        except Exception:
+            TAGS_CACHE[repo] = None
+    return TAGS_CACHE[repo]
+
+def upload_names(tag):
+    if tag not in UPLOAD_CACHE:
+        own = os.environ.get("GITHUB_REPOSITORY", "")
+        names = set()
+        try:
+            r = gh_api_get(f"https://api.github.com/repos/{own}/releases/tags/{tag}")
+            if r.status_code == 200:
+                names = {a.get("name", "") for a in r.json().get("assets", [])}
+        except Exception: pass
+        UPLOAD_CACHE[tag] = names
+    return UPLOAD_CACHE[tag]
+
+def source_has_version(apk_spec, ver):
+    kind = apk_spec.get("source")
+    if kind == "upload":
+        pkg = apk_spec.get("package", "")
+        return any(pkg in n and ver in n for n in upload_names(apk_spec.get("upload_tag", "")))
+    if kind == "github-rel":
+        tags = github_tags(apk_spec.get("gh_repo", ""))
+        return tags is not None and ver.lower() in tags
+    return True
+
+def resolve_variant(v, apk_spec):
+    pol = str(v.get("_policy") or "pin")
+    pkg = apk_spec.get("package", "")
+    if pol == "latest": return "latest", "store-latest via apkeep"
+    if pol not in ("follow", "follow_any", "latest_available"):
+        return pol, f"pinned {pol}"
+    declared = {}
+    for mpp, label in (v.get("_mpps") or []):
+        vs = declared_versions(mpp, pkg)
+        if vs and (not v.get("_authorities") or label in v["_authorities"]):
+            declared[label] = vs
+    if not declared:
+        return None, f"no authority bundle declares versions for {pkg}"
+    sets = list(declared.values())
+    pool = set.intersection(*sets) if pol != "follow_any" else set.union(*sets)
+    if not pool:
+        if pol == "follow":
+            return None, "authority conflict: " + "; ".join(f"{k}→{sorted(x, key=parse_ver)[-1]}" for k, x in declared.items())
+        pool = set.union(*sets)
+    order = sorted(pool, key=parse_ver, reverse=True)
+    who = ", ".join(declared)
+    if pol == "latest_available":
+        for cand in order:
+            if source_has_version(apk_spec, cand):
+                return cand, f"latest_available={cand} (declared by {who})"
+        return None, f"declared {order[0]} not present at source ({apk_spec.get('source')})"
+    return order[0], f"follow={order[0]} (declared by {who})"
+
+def preflight(cfg):
+    for ae in cfg.get("extra_apps", []):
+        for v in ae.get("variants", []):
+            mpps = []
+            for b in v.get("bundles", []):
+                mpp = f"bundles/{ae['id']}_{safe_name(b['label'])}.mpp"
+                try:
+                    if b.get("pin"): ver = download_pinned_mpp(repo_from_url(b["url"]), b["pin"], mpp)
+                    else: ver = download_bundle_smart(b["url"], mpp)
+                    b["_ver"] = ver
+                    b["_status"] = get_release_status(repo_from_url(b["url"]), ver)
+                    mpps.append((mpp, b["label"]))
+                except Exception as e:
+                    v["_skip"] = f"bundle download failed ({b.get('label')}): {e}"
+                    break
+            v["_mpps"] = mpps
+            if v.get("_skip"):
+                RESOLUTION.append(f"- {v['id']}: SKIP ({v['_skip']})")
+                continue
+            pol = str(v.get("_policy") or "")
+            if pol in ("follow", "follow_any", "latest_available", "latest"):
+                ver, why = resolve_variant(v, ae["apk"])
+                RESOLUTION.append(f"- {v['id']}: {why}")
+                if ver is None: v["_skip"] = why
+                else: v["apk_version"] = ver
+            else:
+                RESOLUTION.append(f"- {v['id']}: pinned {v.get('apk_version')}")
+    for bv in cfg.get("variants", []):
+        RESOLUTION.append(f"- {bv.get('id')}: channel {bv.get('type')} (heal-loop discovers version)")
+
+# ============================================================
+# CORE HELPERS (unchanged)
+# ============================================================
 def is_zip(path):
     try:
         with open(path, "rb") as f: return f.read(2) == b"PK"
@@ -246,22 +496,6 @@ def get_release_status(repo, version):
     except Exception: pass
     return "unknown"
 
-def repo_from_url(url):
-    for pat in [r"raw\.githubusercontent\.com/([^/]+/[^/]+)/", r"github\.com/([^/]+/[^/]+)/", r"bundle/([^/]+/[^/]+)/", r"gitlab\.com/([^/]+/[^/]+)/"]:
-        m = re.search(pat, url)
-        if m: return m.group(1)
-    return None
-
-def normalize_bundle_url(url):
-    u = (url or "").strip()
-    m = re.match(r"^https?://(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", u)
-    if m:
-        return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/main/patches-bundle.json"
-    m = re.match(r"^https?://(?:www\.)?github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+?)/?$", u)
-    if m:
-        return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/{m.group(3)}/{m.group(4)}"
-    return u
-
 def download_bundle_from_json(url, dest):
     j = requests.get(url, timeout=120).json()
     dl = j.get("download_url")
@@ -360,6 +594,32 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
         if k is None: return None
         if bundle_only and k != "bundle": return None
         return k
+
+    if source == "github-rel":
+        repo = spec.get("gh_repo", "")
+        raw = f"build/raw_{aid}_{safe_name(version)}_ghrel.bin"
+        for tag in (f"v{version}", str(version)):
+            try:
+                rel = gh_api_get(f"https://api.github.com/repos/{repo}/releases/tags/{tag}").json()
+            except Exception:
+                continue
+            assets = rel.get("assets") or []
+            chosen = None
+            for pat in spec.get("gh_assets") or []:
+                chosen = next((a for a in assets if a.get("name", "") == pat), None)
+                if chosen: break
+            if not chosen:
+                chosen = next((a for a in assets if a.get("name", "").lower().endswith(".apk") and "arm64" in a.get("name", "").lower()), None)
+            if chosen:
+                try:
+                    download_file(chosen["browser_download_url"], raw)
+                    k = accept(raw)
+                    if k: result = (raw, k)
+                except Exception as e: print(f"{aid}: github-rel asset failed: {e}")
+                break
+        RAW_CACHE[key] = result
+        return result
+
     if not bundle_only and source == "upload":
         up_tag = (spec.get("upload_tag") or "").strip()
         own_repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -480,7 +740,6 @@ def scrape_apkmirror_links(spec, version, arch, density, limit=6):
             if btype == "APK" and "forcebaseapk=true" not in out and "bundle" in out.lower(): continue
             if btype == "BUNDLE" and "forcebaseapk=true" in out: continue
             if out not in results:
-                print(f"APKMirror link ({'BUNDLE' if is_bundle else 'APK'}): {out}")
                 results.append(out)
             if len(results) >= limit: return results
     return results
@@ -532,33 +791,11 @@ def scrape_apkcombo(spec, version, arch):
         html = cf_get(url)
         if not html: continue
         m = re.search(r'href="(https://download\.apkcombo\.com/[^"]+)"', html, re.I)
-        if m:
-            dl_url = m.group(1).replace('&amp;', '&')
-            print(f"APKCombo link: {dl_url}")
-            return dl_url
+        if m: return m.group(1).replace('&amp;', '&')
         m = re.search(r'"download_url"\s*:\s*"(https://download\.apkcombo\.com/[^"]+)"', html, re.I)
-        if m:
-            dl_url = m.group(1).replace('\\u0026', '&').replace('&amp;', '&')
-            print(f"APKCombo link (json): {dl_url}")
-            return dl_url
+        if m: return m.group(1).replace('\\u0026', '&').replace('&amp;', '&')
         m = re.search(r'href="(/r2\?u=[^"]+)"', html, re.I)
-        if m:
-            dl_url = "https://apkcombo.com" + m.group(1).replace('&amp;', '&')
-            print(f"APKCombo redirect link: {dl_url}")
-            return dl_url
-        m = re.search(r'data-url="([^"]+)"', html, re.I)
-        if m:
-            dl_url = m.group(1).replace('&amp;', '&')
-            if "download" in dl_url or "apkcombo" in dl_url:
-                print(f"APKCombo data-url: {dl_url}")
-                return dl_url
-        m = re.search(r'class="[^"]*download[^"]*"[^>]*href="([^"]+)"', html, re.I)
-        if m and ("apkcombo.com" in m.group(1) or m.group(1).startswith("/")):
-            dl_url = m.group(1)
-            if dl_url.startswith("/"): dl_url = "https://apkcombo.com" + dl_url
-            print(f"APKCombo button link: {dl_url}")
-            return dl_url
-    print(f"APKCombo did not find a link for {pkg} {version}")
+        if m: return "https://apkcombo.com" + m.group(1).replace('&amp;', '&')
     return None
 
 def scrape_apkpure_net(spec, version):
@@ -582,7 +819,6 @@ def scrape_apkpure_net(spec, version):
                 if a and a.get("href"):
                     href = a["href"]
                     if not href.startswith("http"): href = urljoin("https://apkpure.net", href)
-                    print(f"APKPure link: {href}")
                     return href
                 for a in soup.find_all("a", href=True):
                     href = a["href"]
@@ -597,7 +833,6 @@ def scrape_apkpure_net(spec, version):
                             if b and b.get("href"):
                                 out = b["href"]
                                 if not out.startswith("http"): out = urljoin("https://apkpure.net", out)
-                                print(f"APKPure link: {out}")
                                 return out
             except Exception as e: print(f"APKPure scrape failed for {url}: {e}")
     return None
@@ -667,14 +902,10 @@ def scrape_uptodown(spec, version, arch):
                                 dsoup = BeautifulSoup(dx, "html.parser")
                                 btn = dsoup.find(id="detail-download-button")
                                 if btn and btn.get("data-url"):
-                                    out = urljoin("https://dw.uptodown.com/dwn/", btn["data-url"])
-                                    print(f"Uptodown link: {out}")
-                                    return out
+                                    return urljoin("https://dw.uptodown.com/dwn/", btn["data-url"])
                         btn = vsoup.find(id="detail-download-button")
                         if btn and btn.get("data-url"):
-                            out = urljoin("https://dw.uptodown.com/dwn/", btn["data-url"])
-                            print(f"Uptodown link: {out}")
-                            return out
+                            return urljoin("https://dw.uptodown.com/dwn/", btn["data-url"])
                     if version and version != "latest":
                         try:
                             target = parse_ver(version)
@@ -816,27 +1047,6 @@ def verify_signature(path, ks_fp):
     fp = apk_fingerprint(path)
     if fp: print(f"signature check: apk={fp} keystore={ks_fp} match={fp == ks_fp if ks_fp else None}")
     return fp
-
-def parse_patches_info(bundles):
-    cmd = ["java", "-jar", "build/cli.jar", "list-patches"]
-    for b in bundles: cmd += ["-p", b]
-    cmd += ["--with-packages", "--with-options"]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    info, cur, pending_required = [], None, False
-    for raw in r.stdout.splitlines():
-        line = raw.strip()
-        if line.startswith("Index:"): cur = {"name": None, "packages": [], "required_opts": [], "last_key": None}; info.append(cur)
-        elif cur is None: continue
-        elif line.startswith("Name:"): cur["name"] = line.split(":", 1)[1].strip()
-        elif line.startswith("Package name:"): cur["packages"].append(line.split(":", 1)[1].strip())
-        elif line.startswith("Key:"):
-            cur["last_key"] = line.split(":", 1)[1].strip()
-            if pending_required: cur["required_opts"].append(cur["last_key"]); pending_required = False
-        elif line.startswith("Required:"):
-            req = line.split(":", 1)[1].strip().lower() == "true"
-            if req and cur.get("last_key"): cur["required_opts"].append(cur["last_key"])
-            else: pending_required = req
-    return [x for x in info if x.get("name")]
 
 def compute_auto(info, pkg, exclude, configured, needs_value):
     ex = {x.lower() for x in exclude}
@@ -986,77 +1196,60 @@ def ensure_apkeditor():
 def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_alias, ks_key_password):
     print(f"\n🔒 Stripping permissions from {os.path.basename(apk_path)}")
     print(f"Allowlist ({len(allowlist)} permissions):")
-    for p in allowlist:
-        print(f"  ✓ {p}")
-
+    for p in allowlist: print(f"  ✓ {p}")
     decoded_dir = "build/apkeditor_decoded"
     stripped_apk = "build/stripped_unsigned.apk"
     aligned_apk = "build/stripped_aligned.apk"
-
     allow_set = {a.strip().lower() for a in allowlist}
-    
-    def is_allowed(perm_name):
-        return perm_name.strip().lower() in allow_set
-
+    def is_allowed(perm_name): return perm_name.strip().lower() in allow_set
     try:
         apkeditor_jar = ensure_apkeditor()
-
         print("\n  → Decoding with APKEditor...")
-        if os.path.exists(decoded_dir):
-            shutil.rmtree(decoded_dir)
-        subprocess.run(
-            ["java", "-jar", apkeditor_jar, "d", "-i", apk_path, "-o", decoded_dir, "-f"],
-            check=True, capture_output=True, text=True
-        )
-
+        if os.path.exists(decoded_dir): shutil.rmtree(decoded_dir)
+        subprocess.run(["java", "-jar", apkeditor_jar, "d", "-i", apk_path, "-o", decoded_dir, "-f"], check=True, capture_output=True, text=True)
         manifest_path = os.path.join(decoded_dir, "AndroidManifest.xml")
         if not os.path.exists(manifest_path):
             print("  ⚠️ AndroidManifest.xml not found, skipping permission strip")
             return False
-
         print("  → Parsing AndroidManifest.xml...")
-        
-        # CRITICAL FIX 1: Force namespaces BEFORE parsing
         ET.register_namespace('android', 'http://schemas.android.com/apk/res/android')
         ET.register_namespace('tools', 'http://schemas.android.com/tools')
-        
         tree = ET.parse(manifest_path)
         root = tree.getroot()
         ns = "{http://schemas.android.com/apk/res/android}"
-
         removed = []
         for elem in list(root.iter()):
             if elem.tag.endswith("uses-permission") or elem.tag.endswith("uses-permission-sdk-23"):
-                perm_name = elem.get(f"{ns}name") or elem.get("name")
-                if not perm_name:
-                    continue
-                
+                perm_name = elem.get(f"{ns}name") or elem.get("{http://schemas.android.com/apk/res/android}name") or elem.get("name")
+                if not perm_name: continue
                 if not is_allowed(perm_name):
                     parent = None
                     for p in root.iter():
-                        if elem in list(p):
-                            parent = p
-                            break
+                        if elem in list(p): parent = p; break
                     if parent is not None:
                         parent.remove(elem)
                         removed.append(perm_name)
-
         print(f"  → Removed {len(removed)} non-allowlisted permissions.")
-        
-        # CRITICAL FIX 2: Force the root tag to explicitly declare the namespaces 
-        # so Python doesn't change 'android:' to 'ns0:' when saving the file
+        affected = {FGS_PERM_TO_TYPE[p] for p in removed if p in FGS_PERM_TO_TYPE}
+        if affected:
+            fixed = 0
+            for elem in root.iter():
+                if elem.tag.endswith("service"):
+                    fgs = elem.get(f"{ns}foregroundServiceType") or elem.get("foregroundServiceType")
+                    if not fgs: continue
+                    tokens = [t for t in fgs.split("|") if t and t not in affected]
+                    if tokens: elem.set(f"{ns}foregroundServiceType", "|".join(tokens))
+                    else:
+                        if f"{ns}foregroundServiceType" in elem.attrib: del elem.attrib[f"{ns}foregroundServiceType"]
+                        if "foregroundServiceType" in elem.attrib: del elem.attrib["foregroundServiceType"]
+                    fixed += 1
+            print(f"  → Sanitized foregroundServiceType on {fixed} service(s)")
         root.set("xmlns:android", "http://schemas.android.com/apk/res/android")
         root.set("xmlns:tools", "http://schemas.android.com/tools")
-
         print("  → Writing modified manifest...")
         tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
-
         print("  → Rebuilding with APKEditor...")
-        subprocess.run(
-            ["java", "-jar", apkeditor_jar, "b", "-i", decoded_dir, "-o", stripped_apk],
-            check=True, capture_output=True, text=True
-        )
-
+        subprocess.run(["java", "-jar", apkeditor_jar, "b", "-i", decoded_dir, "-o", stripped_apk], check=True, capture_output=True, text=True)
         sign_src = stripped_apk
         zipalign = find_android_tool("zipalign")
         if zipalign:
@@ -1065,18 +1258,12 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
             sign_src = aligned_apk
         else:
             print("  ⚠️ zipalign not found; signing without alignment")
-
         apksigner = find_android_tool("apksigner")
-        if not apksigner:
-            raise Exception("apksigner not found")
+        if not apksigner: raise Exception("apksigner not found")
         print("  → Re-signing with apksigner...")
-        subprocess.run(
-            [apksigner, "sign", "--ks", ks_path, "--ks-key-alias", ks_alias,
-             "--ks-pass", f"pass:{ks_password}", "--key-pass", f"pass:{ks_key_password}",
-             "--out", apk_path, sign_src],
-            check=True, capture_output=True, text=True
-        )
-
+        subprocess.run([apksigner, "sign", "--ks", ks_path, "--ks-key-alias", ks_alias,
+                        "--ks-pass", f"pass:{ks_password}", "--key-pass", f"pass:{ks_key_password}",
+                        "--out", apk_path, sign_src], check=True, capture_output=True, text=True)
         aapt = find_android_tool("aapt") or find_android_tool("aapt2")
         if aapt:
             print("  → Verifying final manifest...")
@@ -1086,30 +1273,22 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
                 line = line.strip()
                 if line.startswith("uses-permission:"):
                     m2 = re.search(r"name='([^']+)'", line) or re.search(r'name="([^"]+)"', line)
-                    if m2:
-                        final_perms.append(m2.group(1))
-            
+                    if m2: final_perms.append(m2.group(1))
             print(f"\n  ✅ FINAL RESULT: APK contains {len(final_perms)} permissions:")
-            for p in final_perms:
-                print(f"     ✓ {p}")
+            for p in final_perms: print(f"     ✓ {p}")
         else:
             print("  ⚠️ aapt not found; skipping verification")
-
         shutil.rmtree(decoded_dir, ignore_errors=True)
         for f in [stripped_apk, aligned_apk]:
-            if os.path.exists(f):
-                os.remove(f)
+            if os.path.exists(f): os.remove(f)
         return True
-
     except Exception as e:
         print(f"  ⚠️ Permission stripping error: {e}")
         print("  → Keeping original patched APK")
         for p in [decoded_dir, stripped_apk, aligned_apk]:
             if os.path.exists(p):
-                if os.path.isdir(p):
-                    shutil.rmtree(p, ignore_errors=True)
-                else:
-                    os.remove(p)
+                if os.path.isdir(p): shutil.rmtree(p, ignore_errors=True)
+                else: os.remove(p)
         return False
 
 def build_extra_app(app, alias, ks_fp, notes):
@@ -1122,30 +1301,36 @@ def build_extra_app(app, alias, ks_fp, notes):
     keep_all_abis = app.get("keep_all_abis", False)
     variants = app.get("variants", [])
     for v in variants:
+        if v.get("_mpps"):
+            v["_ok"] = True
+            v["_mpps_paths"] = [p for p, _ in v["_mpps"]]
+            continue
         mpps, ok = [], True
         for b in v.get("bundles", []):
             mpp = f"bundles/{aid}_{safe_name(b['label'])}.mpp"
             try:
                 url_n = normalize_bundle_url(b["url"])
-                if b.get("pin"):
-                    ver = download_pinned_mpp(repo_from_url(url_n), b["pin"], mpp)
-                else:
-                    ver = download_bundle_smart(url_n, mpp)
+                if b.get("pin"): ver = download_pinned_mpp(repo_from_url(url_n), b["pin"], mpp)
+                else: ver = download_bundle_smart(url_n, mpp)
                 b["_ver"] = ver
                 b["_status"] = get_release_status(repo_from_url(url_n), ver)
                 mpps.append(mpp)
-            except Exception as e: ok = False; break
+            except Exception: ok = False; break
         v["_ok"] = ok
-        v["_mpps"] = mpps
+        v["_mpps_paths"] = mpps
 
     for v in variants:
         vid = v["id"]
-        if not v.get("_ok"): notes.append(f"## {vid}\nStatus: Failed (bundle download)\n\n"); continue
+        if v.get("_skip"):
+            notes.append(f"## {vid}\nStatus: Skipped ({v['_skip']})\n\n")
+            continue
+        if not v.get("_ok"):
+            notes.append(f"## {vid}\nStatus: Failed (bundle download)\n\n"); continue
         ver = str(v.get("apk_version") or spec.get("version") or "latest")
         vsource = v.get("apk_source", spec.get("source", "apkeep"))
         bases = prepare_bases(app, aid, ver, vsource, arch, dens, languages, keep_all_abis)
         if not bases: notes.append(f"## {vid}\nStatus: Failed (apk source {ver})\n\n"); continue
-        mpps = v["_mpps"]
+        mpps = v["_mpps_paths"]
         gen = generate_options_file(mpps, f"build/gen_{safe_name(vid)}.json")
         if gen is None: notes.append(f"## {vid}\nStatus: Failed (options generation)\n\n"); continue
         per_bundle, seen_lower, dup_skipped = [], set(), []
@@ -1186,15 +1371,14 @@ def build_extra_app(app, alias, ks_fp, notes):
         if not bp: notes.append(f"## {vid}\nStatus: Failed (base extraction)\n\n"); continue
         out = f"build/out_{safe_name(vid)}.apk"
         ok, applied, dropped, missing = heal_patch(bp, out, gen, per_bundle, vid, alias, mpps, keep_all_abis)
-
         if (not ver) or ver.lower() == "latest":
             ver = DETECTED_VERSIONS.get(vid, ver)
-
         final = f"build/{app.get('output_base', aid)}-{ver}-{joined}-patched.apk"
         if ok and os.path.exists(out):
             shutil.copyfile(out, final)
             fp = verify_signature(final, ks_fp)
             note = f"## {vid}\nApp version: {ver}\nBundles: {', '.join(parts)}\nBuild mode: {bmode}\n"
+            if v.get("_resolved_why"): note += f"Version resolution: {v['_resolved_why']}\n"
             if bases["single"]: note += "Note: base is a single APK; no dynamic-feature splits to merge.\n"
             if keep_all_abis: note += "Note: kept all ABIs to satisfy multiArch manifest.\n"
             if fp: note += f"Signing fingerprint: {fp}\n"
@@ -1202,11 +1386,29 @@ def build_extra_app(app, alias, ks_fp, notes):
             if dropped: note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
             if missing: note += "\nRequested but NOT FOUND in any bundle:\n" + "\n".join(f"- {x}" for x in missing) + "\n"
             if dup_skipped: note += "\nDuplicate patches skipped:\n" + "\n".join(f"- {x}" for x in dup_skipped) + "\n"
+            prof = v.get("_profile")
+            if prof:
+                ppath = f"profiles/{prof}.yaml"
+                pdata = None
+                if os.path.exists(ppath):
+                    with open(ppath) as f: pdata = yaml.safe_load(f) or {}
+                if pdata and pdata.get("strip_permissions"):
+                    allow = [clean_name(p) for p in pdata["strip_permissions"]]
+                    if strip_permissions_from_apk(final, allow, "signing/keystore.jks", os.environ.get("KEYSTORE_PASSWORD", ""), alias, os.environ.get("KEY_PASSWORD", "")):
+                        note += f"\nPermission stripping: applied ({len(allow)} allowlisted)\n"
+                        fp2 = verify_signature(final, ks_fp)
+                        if fp2: note += f"Post-strip fingerprint: {fp2}\n"
+                    else:
+                        note += "\nPermission stripping: failed, kept unstripped APK\n"
             note += "\nStatus: Success\n\n"
             notes.append(note)
-        else: notes.append(f"## {vid}\nStatus: Failed\n\n")
+        else:
+            notes.append(f"## {vid}\nStatus: Failed\n\n")
 
 def main():
+    # ==========================================
+    # 🚀 CUSTOM BUILD MODE (unchanged) 🚀
+    # ==========================================
     if os.environ.get("CUSTOM_BUILD"):
         print("🚀 RUNNING IN CUSTOM BUILD MODE 🚀")
         app_id = os.environ.get("CUSTOM_APP", "custom")
@@ -1214,18 +1416,16 @@ def main():
             "tiktok": "com.zhiliaoapp.musically", "youtube": "com.google.android.youtube",
             "ytmusic": "com.google.android.apps.youtube.music", "google": "com.google.android.googlequicksearchbox",
             "gemini": "com.google.android.apps.bard", "windscribe": "com.windscribe.vpn",
-            "protonmail": "ch.protonmail.android", "protonvpn": "ch.protonvpn.android", "brave": "com.brave.browser"
+            "protonmail": "ch.protonmail.android", "protonvpn": "ch.protonvpn.android", "brave": "com.brave.browser",
+            "reddit": "com.reddit.frontpage"
         }
-
         profile_name = os.environ.get("CUSTOM_PROFILE", "").strip()
         profile, profile_src = None, None
         if profile_name:
             base = profile_name
-            if base.lower().endswith((".yaml", ".yml")):
-                base = base.rsplit(".", 1)[0]
+            if base.lower().endswith((".yaml", ".yml")): base = base.rsplit(".", 1)[0]
             cand_paths = [f"profiles/{base}.yaml", f"profiles/{base}.yml"]
-            if f"profiles/{profile_name}" not in cand_paths:
-                cand_paths.append(f"profiles/{profile_name}")
+            if f"profiles/{profile_name}" not in cand_paths: cand_paths.append(f"profiles/{profile_name}")
             for p in cand_paths:
                 if os.path.exists(p):
                     with open(p) as f: profile = yaml.safe_load(f) or {}
@@ -1244,8 +1444,7 @@ def main():
                                 with open(pdest) as f: profile = yaml.safe_load(f) or {}
                                 profile_src = "release-tag:custom-profiles"
                                 break
-                    except Exception as e:
-                        print(f"profile release-tag lookup failed: {e}")
+                    except Exception as e: print(f"profile release-tag lookup failed: {e}")
             if profile is None:
                 print(f"❌ ERROR: profile '{profile_name}' not found in profiles/ nor on release tag 'custom-profiles'")
                 raise SystemExit(1)
@@ -1334,13 +1533,8 @@ def main():
 
         if os.path.exists("build"): shutil.rmtree("build")
         if os.path.exists("bundles"): shutil.rmtree("bundles")
-        os.makedirs("build")
-        os.makedirs("bundles")
-
-        alias = detect_alias()
-        ks_fp = keystore_fingerprint(alias)
-        get_latest_cli_jar()
-
+        os.makedirs("build"); os.makedirs("bundles")
+        alias = detect_alias(); ks_fp = keystore_fingerprint(alias); get_latest_cli_jar()
         notes = []
         for app in config.get("extra_apps", []):
             build_extra_app(app, alias, ks_fp, notes)
@@ -1350,39 +1544,47 @@ def main():
             patched_apks = glob.glob("build/*-patched.apk")
             if patched_apks:
                 apk_path = patched_apks[0]
-                success = strip_permissions_from_apk(
-                    apk_path, allowlist, "signing/keystore.jks",
-                    os.environ.get("KEYSTORE_PASSWORD", ""), alias, os.environ.get("KEY_PASSWORD", "")
-                )
+                success = strip_permissions_from_apk(apk_path, allowlist, "signing/keystore.jks",
+                                                     os.environ.get("KEYSTORE_PASSWORD", ""), alias, os.environ.get("KEY_PASSWORD", ""))
                 if success:
                     fp2 = verify_signature(apk_path, ks_fp)
-                    notes.insert(0, f"## Permission Stripping\n✅ Permissions stripped to {len(allowlist)} allowlisted entries; foregroundServiceType sanitized; re-signed (fingerprint match: {fp2 == ks_fp if ks_fp else 'n/a'}).\n\n")
+                    notes.insert(0, f"## Permission Stripping\n✅ Permissions stripped to {len(allowlist)} allowlisted entries; re-signed (fingerprint match: {fp2 == ks_fp if ks_fp else 'n/a'}).\n\n")
                 else:
-                    notes.insert(0, "## Permission Stripping\n⚠️ Permission stripping failed. Original patched APK kept (all stock permissions remain).\n\n")
+                    notes.insert(0, "## Permission Stripping\n⚠️ Permission stripping failed. Original patched APK kept.\n\n")
 
         head = "# Custom Build Release\n\n"
         if profile_name: head += f"Profile: {profile_name} (from {profile_src})\n\n"
         with open("release_notes.md", "w") as f:
             f.write(head + "".join(notes))
-
         if not glob.glob("build/*-patched.apk"):
-            print("\n" + "=" * 60)
-            print("❌ FATAL: Custom build failed to produce an APK!")
-            print("".join(notes))
-            print("=" * 60 + "\n")
+            print("\n❌ FATAL: Custom build failed to produce an APK!\n" + "".join(notes))
             raise SystemExit(1)
-
         print("✅ Custom build successful!")
         return
 
-    with open("config.yaml", "r") as f: config = yaml.safe_load(f)
+    # ==========================================
+    # 📦 STANDARD BATCH MODE (v2-aware) 📦
+    # ==========================================
+    config = load_config("config.yaml")
     if os.path.exists("build"): shutil.rmtree("build")
     if os.path.exists("bundles"): shutil.rmtree("bundles")
-    os.makedirs("build")
-    os.makedirs("bundles")
-    alias = detect_alias()
-    ks_fp = keystore_fingerprint(alias)
-    get_latest_cli_jar()
+    os.makedirs("build"); os.makedirs("bundles")
+    alias = detect_alias(); ks_fp = keystore_fingerprint(alias); get_latest_cli_jar()
+
+    preflight(config)
+
+    if "--plan" in sys.argv:
+        plan = {"schema": SCHEMA,
+                "resolution": RESOLUTION,
+                "builds": [v["id"] for ae in config["extra_apps"] for v in ae["variants"] if not v.get("_skip")],
+                "skips": [{"id": v["id"], "reason": v["_skip"]} for ae in config["extra_apps"] for v in ae["variants"] if v.get("_skip")]}
+        with open("plan.json", "w") as f: json.dump(plan, f, indent=2)
+        with open("resolution_report.md", "w") as f: f.write("# Version resolution\n\n" + "\n".join(RESOLUTION) + "\n")
+        print("\n📋 PLAN (no builds executed):")
+        print("\n".join(RESOLUTION))
+        print("Builds:", ", ".join(plan["builds"]) or "(none)")
+        return
+
     dh6k_tag = "unknown"
     try: dh6k_tag = download_stable_mpp("dh6k/morphe-patches", "bundles/dh6k.mpp")
     except Exception: pass
@@ -1424,10 +1626,17 @@ def main():
         if name_patch: configurable.add(name_patch)
         if clone_patch: configurable.add(clone_patch)
         auto = compute_auto(info_dh6k, CHANNEL_PKG[channel], config.get("exclude_patches", []), configurable, needs_brave) if config.get("auto_include_new_patches", True) else []
-        for variant in [v for v in config["variants"] if v["type"] == channel]:
+        for variant in [v for v in config["variants"] if v.get("type") == channel]:
             bundles, gen, names, n_patch, c_patch = BUNDLES, gen_brave, all_names, name_patch, clone_patch
             if variant.get("bundles"):
-                bundles = [extra_bundles[bid] if bid in extra_bundles else f"bundles/{bid}.mpp" for bid in variant["bundles"] if bid in extra_bundles or os.path.exists(f"bundles/{bid}.mpp")]
+                bundles = []
+                for bb in variant["bundles"]:
+                    if isinstance(bb, dict):
+                        mpp = f"bundles/{safe_name(bb.get('label', 'b'))}.mpp"
+                        if not os.path.exists(mpp): download_bundle_smart(bb["url"], mpp)
+                        bundles.append(mpp)
+                    elif bb in extra_bundles: bundles.append(extra_bundles[bb])
+                    elif os.path.exists(f"bundles/{bb}.mpp"): bundles.append(f"bundles/{bb}.mpp")
                 gen = generate_options_file(bundles, f"build/gen_{variant['id']}.json")
                 names = set()
                 for g in gen or []: names |= set((g.get("patches") or {}).keys())
@@ -1497,7 +1706,8 @@ def main():
             note += "\nStatus: " + ("Best effort" if best_effort else "Success") + "\n\n"
             notes.append(note)
     for app in config.get("extra_apps", []): build_extra_app(app, alias, ks_fp, notes)
-    with open("release_notes.md", "w") as f: f.write("# Morphe AutoBuilds Release\n\n" + "".join(notes))
+    with open("release_notes.md", "w") as f:
+        f.write("# Morphe AutoBuilds Release\n\n## Version resolution\n" + "\n".join(RESOLUTION) + "\n\n" + "".join(notes))
 
     if not glob.glob("build/*-patched.apk"):
         print("\n" + "=" * 60)
