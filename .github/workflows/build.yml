@@ -2,14 +2,20 @@ name: Build and Release (Batch)
 
 on:
   workflow_dispatch:
+    inputs:
+      plan_only:
+        description: "Only resolve versions + emit plan (no builds, no release)"
+        required: false
+        type: boolean
+        default: false
   schedule:
-    - cron: '0 0 * * *'
+    - cron: "0 6 * * *"   # adjust to your preferred schedule
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  batch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,18 +38,37 @@ jobs:
         run: |
           mkdir -p signing
           if [ -z "${KEYSTORE_BASE64}" ]; then
-            echo "❌ ERROR: KEYSTORE_BASE64 secret is EMPTY or MISSING! Check your repo secrets."
+            echo "❌ ERROR: KEYSTORE_BASE64 secret is EMPTY or MISSING!"
             exit 1
           fi
           echo "${KEYSTORE_BASE64}" | base64 -d > signing/keystore.jks
           SIZE=$(stat -c%s signing/keystore.jks)
-          echo "keystore.jks size: ${SIZE} bytes"
           if [ "${SIZE}" -lt 100 ]; then
-            echo "❌ ERROR: keystore.jks too small (${SIZE} bytes) — decode failed!"
+            echo "❌ ERROR: keystore.jks too small (${SIZE} bytes)!"
             exit 1
           fi
 
-      - name: Build APKs
+      - name: Plan only (resolve versions, no builds)
+        if: ${{ inputs.plan_only }}
+        run: python build.py --plan
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload plan artifacts
+        if: ${{ inputs.plan_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-plan
+          path: |
+            plan.json
+            resolution_report.md
+          retention-days: 14
+
+      - name: Full batch build
+        if: ${{ !inputs.plan_only }}
         run: python build.py
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -51,56 +76,21 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload APKs as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: patched-apks
-          path: build/*-patched.apk
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload release notes as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-notes
-          path: release_notes.md
-          retention-days: 7
-
-  publish:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download APK artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: patched-apks
-          path: dist
-
-      - name: Download notes artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: release-notes
-          path: notes
-
-      - name: Generate release tag
-        id: tag
-        run: echo "TAG=build-$(date +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ steps.tag.outputs.TAG }}" --title "${{ steps.tag.outputs.TAG }}" --notes-file notes/release_notes.md
-
-      - name: Upload assets with retry
+      - name: Create release and upload with retry
+        if: ${{ !inputs.plan_only }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for f in dist/*.apk; do
+          if ! ls build/*-patched.apk 1> /dev/null 2>&1; then
+            echo "❌ ERROR: build.py did not create any -patched.apk files!"
+            exit 1
+          fi
+          TAG="build-$(date +%Y%m%d-%H%M%S)"
+          gh release create "$TAG" --title "Morphe AutoBuilds ($TAG)" --notes-file release_notes.md
+          for f in build/*-patched.apk; do
             ok=0
             for i in 1 2 3 4 5; do
-              if gh release upload "${{ steps.tag.outputs.TAG }}" "$f" --clobber; then
+              if gh release upload "$TAG" "$f" --clobber; then
                 echo "✅ uploaded $f"; ok=1; break
               fi
               echo "attempt $i failed for $f, retrying in 20s"; sleep 20
