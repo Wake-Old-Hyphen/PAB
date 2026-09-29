@@ -101,7 +101,7 @@ builds:
 
   - id: brave-mono
     app: brave
-    version: follow                      # ← follows kveld9's declared Brave target forever
+    version: follow
     clone: com.brave.mono
     name: Brave Mono
     bundles:
@@ -139,7 +139,7 @@ builds:
   # ===== TikTok =====
   - id: tiktok-hushfeed
     app: tiktok
-    version: latest_available            # highest hushfeed-supported version you uploaded
+    version: latest_available
     bundles:
       - hushfeed: {authority: true}
       - nai64-extra: {patches: ["Empty Clipboard Report"]}
@@ -197,7 +197,7 @@ builds:
   - id: tiktok-privacy
     app: tiktok
     version: "47.0.3"
-    profile: tiktok-hushfeed-privacy     # batch now applies its strip_permissions too
+    profile: tiktok-hushfeed-privacy
     clone: com.tiktok.zixmophe
     name: TikTok Privacy
     bundles:
@@ -245,7 +245,7 @@ builds:
       - hushfeed: {authority: true}
       - nai64-extra: {patches: ["Empty Clipboard Report"]}
 
-  # ===== Reddit (single-authority pair — no intersection stall) =====
+  # ===== Reddit (single-authority pair) =====
   - id: reddit-morphe
     app: reddit
     version: follow
@@ -257,7 +257,7 @@ builds:
   - id: reddit-adobo
     app: reddit
     version: follow
-    clone: com.reddit.zixadobo           # identity option A (coexist); change to com.reddit.zixmophe/RDZ for option B
+    clone: com.reddit.zixadobo
     name: RDZ Adobo
     bundles:
       - adobo: {authority: true}
