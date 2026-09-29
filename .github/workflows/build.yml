@@ -8,6 +8,16 @@ on:
         required: false
         type: boolean
         default: false
+      force_rebuild:
+        description: "Ignore cache and rebuild all variants"
+        required: false
+        type: boolean
+        default: false
+      clear_cache:
+        description: "Clear cache and rebuild everything from scratch"
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "0 6 * * *"   # adjust to your preferred schedule
 
@@ -67,14 +77,35 @@ jobs:
             resolution_report.md
           retention-days: 14
 
+      - name: Restore build cache
+        if: ${{ !inputs.plan_only && !inputs.clear_cache }}
+        uses: actions/cache@v4
+        with:
+          path: .pab-cache.json
+          key: pab-cache-${{ github.run_id }}
+          restore-keys: |
+            pab-cache-
+
       - name: Full batch build
         if: ${{ !inputs.plan_only }}
-        run: python build.py
+        run: |
+          if [ "${{ inputs.force_rebuild }}" = "true" ]; then
+            python build.py --force-rebuild
+          else
+            python build.py
+          fi
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save build cache
+        if: ${{ !inputs.plan_only }}
+        uses: actions/cache/save@v4
+        with:
+          path: .pab-cache.json
+          key: pab-cache-${{ github.run_id }}
 
       - name: Create release and upload with retry
         if: ${{ !inputs.plan_only }}
@@ -85,7 +116,7 @@ jobs:
             echo "❌ ERROR: build.py did not create any -patched.apk files!"
             exit 1
           fi
-          TAG="build-$(date +%Y%m%d-%H%M%S)"
+          TAG="$(cat build/release_tag.txt 2>/dev/null || echo build-$(date +%Y%m%d-%H%M%S))"
           gh release create "$TAG" --title "Morphe AutoBuilds ($TAG)" --notes-file release_notes.md
           for f in build/*-patched.apk; do
             ok=0
