@@ -24,7 +24,7 @@ bundles:
   dh6k:          {url: "https://raw.githubusercontent.com/dh6k/morphe-patches/main/patches-bundle.json"}
   anddea:        {url: "https://raw.githubusercontent.com/anddea/revanced-patches/dev/patches-bundle.json"}
   adobo:         {url: "https://raw.githubusercontent.com/jkennethcarino/adobo/main/patches-bundle.json"}
-  hxreborn:      {url: "https://raw.githubusercontent.com/hxreborn/hxreborn-tiktok-patches/main/patches-bundle.json"}
+  hxreborn:      {url: "https://raw.githubusercontent.com/hxreborn/morphe-patches/main/patches-bundle.json"}
   icysymmetra:   {url: "https://revanced-external-bundles.brosssh.com/api/v2/bundle/icysymmetra/tiktok-patches-for-morphe/latest?channel=prerelease"}
   rushiranpise:  {url: "https://raw.githubusercontent.com/rushiranpise/morphe-patches/main/patches-bundle.json"}
   kondratjev:    {url: "https://raw.githubusercontent.com/kondratjev/morphe-patches/main/patches-bundle.json"}
@@ -67,6 +67,13 @@ apps:
   windscribe: {package: com.windscribe.vpn,    source: {kind: apkeep}, version_policy: latest, density: ["332dpi", "xhdpi", "xxhdpi"]}
   protonmail: {package: ch.protonmail.android, source: {kind: apkeep}, version_policy: latest, density: ["332dpi", "xhdpi", "xxhdpi"]}
   protonvpn:  {package: ch.protonvpn.android,  source: {kind: apkeep}, version_policy: latest, density: ["332dpi", "xhdpi", "xxhdpi"]}
+  
+  # NEW: Mindicator App Registry Entry
+  mindicator:
+    package: com.mobond.mindicator
+    source: {kind: apkeep}
+    version_policy: latest
+    density: ["nodpi", "xxhdpi"]
 
 # ---------- BUILD LIST ----------
 builds:
@@ -318,3 +325,12 @@ builds:
       - rushiranpise: {patches: ["Unlock VPN Plus"]}
       - kondratjev: {patches: ["Disable analytics"]}
       - paresh: {patches: ["Disable telemetry"]}
+
+  # ===== NEW: Mindicator Build Entry =====
+  - id: mindicator-clean
+    app: mindicator
+    version: latest
+    profile: mindicator-minimal
+    bundles:
+      - hxreborn: {authority: true, patches: ["Remove Ads", "Disable Analytics"]}
+      - nai64-extra: {patches: ["Remove Ads", "Disable Analytics", "Empty Clipboard Report"]}
