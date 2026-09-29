@@ -19,6 +19,8 @@ strip_permissions:
   - android.permission.ACCESS_NETWORK_STATE
 
 bundles:
-  - url: https://raw.githubusercontent.com/SysAdminDoc/hushfeed/refs/heads/main/patches-bundle.json
+  - url: https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json
     label: Hushfeed
-    # patches: (omit = ALL compatible patches from Hushfeed)
+    # To test your AMOLED fork instead, swap the url to:
+    # https://raw.githubusercontent.com/Wake-Old-Hyphen/hushfeed/main/patches-bundle.json
+    # patches: (omit = ALL compatible patches)
