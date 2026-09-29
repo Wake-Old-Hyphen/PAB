@@ -21,6 +21,7 @@ on:
           - protonmail
           - protonvpn
           - brave
+          - reddit
       package_name:
         description: 'Package name (blank = default for app, or profile value)'
         required: false
