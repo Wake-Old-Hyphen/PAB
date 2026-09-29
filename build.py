@@ -12,6 +12,7 @@ import zipfile
 import hashlib
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 from urllib.parse import quote_plus, urljoin
 
@@ -47,10 +48,14 @@ RAW_CACHE = {}
 BASE_CACHE = {}
 DETECTED_VERSIONS = {}
 RESOLUTION = []
+BUILT = []
+SKIPPED = []
 DECLARED_CACHE = {}
 TAGS_CACHE = {}
 UPLOAD_CACHE = {}
 SCHEMA = 2
+CACHE_SCHEMA = 1
+CACHE_FILE = ".pab-cache.json"
 
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 ET.register_namespace("android", ANDROID_NS)
@@ -76,6 +81,72 @@ FGS_PERM_TO_TYPE = {
     "android.permission.ACCESS_BACKGROUND_LOCATION": "location",
 }
 
+# ============================================================
+# PHASE 2: CACHE MANAGEMENT
+# ============================================================
+def now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+def compute_config_hash(variant):
+    h = hashlib.sha256()
+    h.update(json.dumps({
+        "id": variant.get("id"),
+        "clone_package": variant.get("clone_package"),
+        "app_name": variant.get("app_name"),
+        "exclude_patches": sorted(variant.get("exclude_patches") or []),
+        "options": variant.get("options") or {},
+        "bundles": [{"label": b.get("label"), "patches": b.get("patches"), "options": b.get("options"), "pin": b.get("pin")} for b in variant.get("bundles", [])],
+        "profile": variant.get("_profile"),
+        "apk_version": variant.get("apk_version"),
+        "_policy": variant.get("_policy"),
+    }, sort_keys=True, separators=(',', ':')).encode())
+    return h.hexdigest()
+
+def load_cache():
+    if not os.path.exists(CACHE_FILE):
+        return {"schema": CACHE_SCHEMA, "variants": {}}
+    try:
+        with open(CACHE_FILE) as f:
+            c = json.load(f)
+            if c.get("schema") != CACHE_SCHEMA:
+                return {"schema": CACHE_SCHEMA, "variants": {}}
+            return c
+    except Exception:
+        return {"schema": CACHE_SCHEMA, "variants": {}}
+
+def save_cache(cache):
+    with open(CACHE_FILE, "w") as f:
+        json.dump(cache, f, indent=2)
+
+def should_skip_variant(variant_id, cache, current):
+    if not cache or variant_id not in cache.get("variants", {}):
+        return False, "no cache entry"
+    entry = cache["variants"][variant_id]
+    if entry.get("status") == "failed":
+        return False, "last build failed (auto-retry)"
+    if entry.get("resolved") != current.get("resolved"):
+        return False, f"version changed: {entry.get('resolved')} -> {current.get('resolved')}"
+    if entry.get("config_hash") != current.get("config_hash"):
+        return False, "config changed"
+    if entry.get("bundles") != current.get("bundles"):
+        return False, "bundle tags changed"
+    return True, f"unchanged (last built {str(entry.get('built_at', '?'))[:10]}, release {entry.get('release_tag', '?')})"
+
+def update_cache_entry(cache, variant_id, data):
+    cache.setdefault("variants", {})[variant_id] = {
+        "schema": CACHE_SCHEMA,
+        "resolved": data.get("resolved"),
+        "config_hash": data.get("config_hash"),
+        "bundles": data.get("bundles"),
+        "status": data.get("status", "success"),
+        "output": data.get("output"),
+        "release_tag": data.get("release_tag"),
+        "built_at": data.get("built_at") or now_iso(),
+    }
+
+# ============================================================
+# CONFIG v2 LOADER (legacy-compatible)
+# ============================================================
 def gh_api_get(url, timeout=60):
     headers = dict(UA)
     tok = os.environ.get("GITHUB_TOKEN", "")
@@ -90,9 +161,6 @@ def norm_key(s): return re.sub(r"[^a-z0-9]", "", (s or "").lower())
 def safe_name(s): return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(s))
 def clean_name(p): return re.sub(r"\s+", " ", (p or "")).strip()
 
-# ============================================================
-# CONFIG v2 LOADER (legacy-compatible)
-# ============================================================
 def normalize_bundle_url(url):
     u = (url or "").strip()
     m = re.match(r"^https?://(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", u)
@@ -195,7 +263,7 @@ def load_config(path="config.yaml"):
     return normalize_legacy(raw)
 
 # ============================================================
-# VERSION RESOLUTION
+# VERSION RESOLUTION (Phase 1)
 # ============================================================
 def parse_patches_info(bundles):
     cmd = ["java", "-jar", "build/cli.jar", "list-patches"]
@@ -290,7 +358,7 @@ def resolve_variant(v, apk_spec):
     pool = set.intersection(*sets) if pol != "follow_any" else set.union(*sets)
     if not pool:
         if pol == "follow":
-            return None, "authority conflict: " + "; ".join(f"{k}→{sorted(x, key=parse_ver)[-1]}" for k, x in declared.items())
+            return None, "authority conflict: " + "; ".join(f"{k}->{sorted(x, key=parse_ver)[-1]}" for k, x in declared.items())
         pool = set.union(*sets)
     order = sorted(pool, key=parse_ver, reverse=True)
     who = ", ".join(declared)
@@ -325,14 +393,14 @@ def preflight(cfg):
                 ver, why = resolve_variant(v, ae["apk"])
                 RESOLUTION.append(f"- {v['id']}: {why}")
                 if ver is None: v["_skip"] = why
-                else: v["apk_version"] = ver
+                else: v["apk_version"] = ver; v["_resolved_why"] = why
             else:
                 RESOLUTION.append(f"- {v['id']}: pinned {v.get('apk_version')}")
     for bv in cfg.get("variants", []):
         RESOLUTION.append(f"- {bv.get('id')}: channel {bv.get('type')} (heal-loop discovers version)")
 
 # ============================================================
-# CORE HELPERS (unchanged)
+# CORE HELPERS
 # ============================================================
 def is_zip(path):
     try:
@@ -1291,7 +1359,7 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
                 else: os.remove(p)
         return False
 
-def build_extra_app(app, alias, ks_fp, notes):
+def build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild=False, release_tag=""):
     aid = app["id"]
     spec = app["apk"]
     arch = spec.get("arch", "arm64-v8a")
@@ -1322,17 +1390,39 @@ def build_extra_app(app, alias, ks_fp, notes):
     for v in variants:
         vid = v["id"]
         if v.get("_skip"):
+            SKIPPED.append({"id": vid, "reason": v["_skip"]})
             notes.append(f"## {vid}\nStatus: Skipped ({v['_skip']})\n\n")
             continue
+
+        bundles_tags = {b.get("label"): str(b.get("_ver", "?")).lstrip("v") for b in v["bundles"]}
+        config_hash = compute_config_hash(v)
+        resolved = str(v.get("apk_version") or spec.get("version") or "latest")
+        skip, reason = should_skip_variant(vid, cache, {"resolved": resolved, "config_hash": config_hash, "bundles": bundles_tags})
+        if skip and not force_rebuild:
+            SKIPPED.append({"id": vid, "reason": reason})
+            notes.append(f"## {vid}\nStatus: Skipped (unchanged)\nReason: {reason}\n\n")
+            continue
+
         if not v.get("_ok"):
-            notes.append(f"## {vid}\nStatus: Failed (bundle download)\n\n"); continue
+            notes.append(f"## {vid}\nStatus: Failed (bundle download)\n\n")
+            update_cache_entry(cache, vid, {"resolved": resolved, "config_hash": config_hash, "bundles": bundles_tags, "status": "failed", "release_tag": release_tag})
+            continue
+
         ver = str(v.get("apk_version") or spec.get("version") or "latest")
         vsource = v.get("apk_source", spec.get("source", "apkeep"))
         bases = prepare_bases(app, aid, ver, vsource, arch, dens, languages, keep_all_abis)
-        if not bases: notes.append(f"## {vid}\nStatus: Failed (apk source {ver})\n\n"); continue
+        if not bases:
+            notes.append(f"## {vid}\nStatus: Failed (apk source {ver})\n\n")
+            update_cache_entry(cache, vid, {"resolved": resolved, "config_hash": config_hash, "bundles": bundles_tags, "status": "failed", "release_tag": release_tag})
+            continue
+
         mpps = v["_mpps_paths"]
         gen = generate_options_file(mpps, f"build/gen_{safe_name(vid)}.json")
-        if gen is None: notes.append(f"## {vid}\nStatus: Failed (options generation)\n\n"); continue
+        if gen is None:
+            notes.append(f"## {vid}\nStatus: Failed (options generation)\n\n")
+            update_cache_entry(cache, vid, {"resolved": resolved, "config_hash": config_hash, "bundles": bundles_tags, "status": "failed", "release_tag": release_tag})
+            continue
+
         per_bundle, seen_lower, dup_skipped = [], set(), []
         for i, g in enumerate(gen):
             bundle_cfg = v.get("bundles", [])[i] if i < len(v.get("bundles", [])) else {}
@@ -1368,7 +1458,11 @@ def build_extra_app(app, alias, ks_fp, notes):
         parts = [f"{b['label']}_v{str(b.get('_ver', '?')).lstrip('v')}-{b.get('_status', '?')}" for b in v["bundles"]]
         joined = "_X_".join(parts)
         bp, bmode = bases["base"]
-        if not bp: notes.append(f"## {vid}\nStatus: Failed (base extraction)\n\n"); continue
+        if not bp:
+            notes.append(f"## {vid}\nStatus: Failed (base extraction)\n\n")
+            update_cache_entry(cache, vid, {"resolved": resolved, "config_hash": config_hash, "bundles": bundles_tags, "status": "failed", "release_tag": release_tag})
+            continue
+
         out = f"build/out_{safe_name(vid)}.apk"
         ok, applied, dropped, missing = heal_patch(bp, out, gen, per_bundle, vid, alias, mpps, keep_all_abis)
         if (not ver) or ver.lower() == "latest":
@@ -1402,12 +1496,15 @@ def build_extra_app(app, alias, ks_fp, notes):
                         note += "\nPermission stripping: failed, kept unstripped APK\n"
             note += "\nStatus: Success\n\n"
             notes.append(note)
+            BUILT.append({"id": vid, "output": final})
+            update_cache_entry(cache, vid, {"resolved": resolved, "config_hash": config_hash, "bundles": bundles_tags, "status": "success", "output": final, "release_tag": release_tag})
         else:
             notes.append(f"## {vid}\nStatus: Failed\n\n")
+            update_cache_entry(cache, vid, {"resolved": resolved, "config_hash": config_hash, "bundles": bundles_tags, "status": "failed", "release_tag": release_tag})
 
 def main():
     # ==========================================
-    # 🚀 CUSTOM BUILD MODE (unchanged) 🚀
+    # 🚀 CUSTOM BUILD MODE (no cache, unchanged) 🚀
     # ==========================================
     if os.environ.get("CUSTOM_BUILD"):
         print("🚀 RUNNING IN CUSTOM BUILD MODE 🚀")
@@ -1537,7 +1634,7 @@ def main():
         alias = detect_alias(); ks_fp = keystore_fingerprint(alias); get_latest_cli_jar()
         notes = []
         for app in config.get("extra_apps", []):
-            build_extra_app(app, alias, ks_fp, notes)
+            build_extra_app(app, alias, ks_fp, notes, {"variants": {}}, force_rebuild=True, release_tag="")
 
         if profile and profile.get("strip_permissions"):
             allowlist = [clean_name(p) for p in profile["strip_permissions"]]
@@ -1563,7 +1660,7 @@ def main():
         return
 
     # ==========================================
-    # 📦 STANDARD BATCH MODE (v2-aware) 📦
+    # 📦 STANDARD BATCH MODE (v2 + cache) 📦
     # ==========================================
     config = load_config("config.yaml")
     if os.path.exists("build"): shutil.rmtree("build")
@@ -1584,6 +1681,11 @@ def main():
         print("\n".join(RESOLUTION))
         print("Builds:", ", ".join(plan["builds"]) or "(none)")
         return
+
+    cache = load_cache()
+    force_rebuild = "--force-rebuild" in sys.argv
+    release_tag = "build-" + time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    with open("build/release_tag.txt", "w") as f: f.write(release_tag)
 
     dh6k_tag = "unknown"
     try: dh6k_tag = download_stable_mpp("dh6k/morphe-patches", "bundles/dh6k.mpp")
@@ -1618,7 +1720,7 @@ def main():
     clone_patch = resolve("clone app", all_names)
     brave_releases = get_releases("brave/brave-browser")
     latest_stable = get_latest_stable("brave/brave-browser")
-    cache, notes = {}, []
+    apk_cache, notes = {}, []
     for channel in ["stable", "nightly", "beta"]:
         cands = pick_candidates(brave_releases, channel, latest_stable)
         if not cands: continue
@@ -1627,6 +1729,15 @@ def main():
         if clone_patch: configurable.add(clone_patch)
         auto = compute_auto(info_dh6k, CHANNEL_PKG[channel], config.get("exclude_patches", []), configurable, needs_brave) if config.get("auto_include_new_patches", True) else []
         for variant in [v for v in config["variants"] if v.get("type") == channel]:
+            vid = variant["id"]
+            btags = {"dh6k": dh6k_tag, "official": official_tag}
+            chash = compute_config_hash(variant)
+            channel_latest = cands[0][0]
+            skip, reason = should_skip_variant(vid, cache, {"resolved": channel_latest, "config_hash": chash, "bundles": btags})
+            if skip and not force_rebuild:
+                SKIPPED.append({"id": vid, "reason": reason})
+                notes.append(f"## {variant.get('output_name', vid)}\nStatus: Skipped (unchanged)\nReason: {reason}\n\n")
+                continue
             bundles, gen, names, n_patch, c_patch = BUNDLES, gen_brave, all_names, name_patch, clone_patch
             if variant.get("bundles"):
                 bundles = []
@@ -1637,7 +1748,7 @@ def main():
                         bundles.append(mpp)
                     elif bb in extra_bundles: bundles.append(extra_bundles[bb])
                     elif os.path.exists(f"bundles/{bb}.mpp"): bundles.append(f"bundles/{bb}.mpp")
-                gen = generate_options_file(bundles, f"build/gen_{variant['id']}.json")
+                gen = generate_options_file(bundles, f"build/gen_{vid}.json")
                 names = set()
                 for g in gen or []: names |= set((g.get("patches") or {}).keys())
                 n_patch = resolve("change app name", names)
@@ -1648,7 +1759,10 @@ def main():
                 target_tag = m.group(1) if m else "unknown"
                 apk_path = f"build/brave_{safe_name(target_tag)}_exact.apk"
                 try: download_file(exact_asset_url, apk_path)
-                except Exception: notes.append(f"## {variant['output_name']}\nStatus: Failed (exact_asset download)\n\n"); continue
+                except Exception:
+                    notes.append(f"## {variant['output_name']}\nStatus: Failed (exact_asset download)\n\n")
+                    update_cache_entry(cache, vid, {"resolved": channel_latest, "config_hash": chash, "bundles": btags, "status": "failed", "release_tag": release_tag})
+                    continue
                 exact_patches = variant.get("exact_patches", {})
                 if exact_patches:
                     per_bundle = [{} for _ in gen]
@@ -1669,8 +1783,8 @@ def main():
                 if variant.get("clone_package") and c_patch:
                     for i, g in enumerate(gen):
                         if c_patch in (g.get("patches") or {}): per_bundle[i][c_patch] = {"packageName": variant["clone_package"]}; break
-                out = f"build/out_{safe_name(variant['id'])}_{safe_name(target_tag)}.apk"
-                ok, applied, dropped, missing = heal_patch(apk_path, out, gen, per_bundle, variant["id"], alias, bundles)
+                out = f"build/out_{safe_name(vid)}_{safe_name(target_tag)}.apk"
+                ok, applied, dropped, missing = heal_patch(apk_path, out, gen, per_bundle, vid, alias, bundles)
                 final = f"build/{variant['output_name']}-{target_tag}-{dh6k_tag}-patched.apk"
                 if ok and os.path.exists(out): shutil.copyfile(out, final); fp = verify_signature(final, ks_fp)
                 else: fp = None
@@ -1681,6 +1795,7 @@ def main():
                 if missing: note += "\nRequested but NOT FOUND in any bundle:\n" + "\n".join(f"- {x}" for x in missing) + "\n"
                 note += "\nStatus: " + ("Success" if ok else "Failed") + "\n\n"
                 notes.append(note)
+                update_cache_entry(cache, vid, {"resolved": channel_latest, "config_hash": chash, "bundles": btags, "status": "success" if ok else "failed", "output": final, "release_tag": release_tag})
                 continue
             per_bundle = []
             for g in gen:
@@ -1695,7 +1810,7 @@ def main():
             if variant.get("clone_package") and c_patch:
                 for i, g in enumerate(gen):
                     if c_patch in (g.get("patches") or {}): per_bundle[i][c_patch] = {"packageName": variant["clone_package"]}; break
-            tag, out, applied, dropped, best_effort = find_working_brave_version(cands, per_bundle, gen, alias, cache, variant["id"], bundles)
+            tag, out, applied, dropped, best_effort = find_working_brave_version(cands, per_bundle, gen, alias, apk_cache, vid, bundles)
             final = f"build/{variant['output_name']}-{tag}-{dh6k_tag}-patched.apk"
             if os.path.exists(out): shutil.copyfile(out, final); fp = verify_signature(final, ks_fp)
             else: fp = None
@@ -1705,9 +1820,20 @@ def main():
             if dropped: note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
             note += "\nStatus: " + ("Best effort" if best_effort else "Success") + "\n\n"
             notes.append(note)
-    for app in config.get("extra_apps", []): build_extra_app(app, alias, ks_fp, notes)
+            BUILT.append({"id": vid, "output": final})
+            update_cache_entry(cache, vid, {"resolved": channel_latest, "config_hash": chash, "bundles": btags, "status": "success", "output": final, "release_tag": release_tag})
+    for app in config.get("extra_apps", []):
+        build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild, release_tag)
+
+    skip_section = ""
+    if SKIPPED:
+        skip_section = "\n\n## Skipped (unchanged)\n" + "\n".join(f"- **{s['id']}**: {s['reason']}" for s in SKIPPED) + "\n"
+    head = f"# Morphe AutoBuilds Release\n\nBuilt: {len(BUILT)} · Skipped: {len(SKIPPED)}\n\n## Version resolution\n"
     with open("release_notes.md", "w") as f:
-        f.write("# Morphe AutoBuilds Release\n\n## Version resolution\n" + "\n".join(RESOLUTION) + "\n\n" + "".join(notes))
+        f.write(head + "\n".join(RESOLUTION) + skip_section + "\n\n" + "".join(notes))
+
+    save_cache(cache)
+    print(f"\n📦 Built {len(BUILT)} · Skipped {len(SKIPPED)}")
 
     if not glob.glob("build/*-patched.apk"):
         print("\n" + "=" * 60)
