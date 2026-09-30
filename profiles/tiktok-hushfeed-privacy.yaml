@@ -19,7 +19,7 @@ strip_permissions:
   - android.permission.ACCESS_NETWORK_STATE
 
 bundles:
-  - url: https://raw.githubusercontent.com/SysAdminDoc/hushfeed/main/patches-bundle.json
+  - url: https://github.com/Wake-Old-Hyphen/hushfeed/releases/download/v0.65.0/patches-0.65.0.mpp
     label: Hushfeed
     # To test your AMOLED fork instead, swap the url to:
     # https://raw.githubusercontent.com/Wake-Old-Hyphen/hushfeed/main/patches-bundle.json
