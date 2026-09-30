@@ -1563,7 +1563,7 @@ def main():
             "ytmusic": "com.google.android.apps.youtube.music", "google": "com.google.android.googlequicksearchbox",
             "gemini": "com.google.android.apps.bard", "windscribe": "com.windscribe.vpn",
             "protonmail": "ch.protonmail.android", "protonvpn": "ch.protonvpn.android", "brave": "com.brave.browser",
-            "reddit": "com.reddit.frontpage"
+            "reddit": "com.reddit.frontpage", "mindicator": "com.mobond.mindicator"
         }
         profile_name = os.environ.get("CUSTOM_PROFILE", "").strip()
         profile, profile_src = None, None
