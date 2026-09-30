@@ -1,6 +1,6 @@
 apk_version: latest
 source: apkeep
-# No clone_package or app_name defined -> keeps original com.mobond.mindicator / "Mindicator"
+# No clone_package or app_name defined -> keeps original com.mobond.mindicator
 
 strip_permissions:
   - android.permission.ACCESS_NETWORK_STATE
@@ -11,16 +11,3 @@ strip_permissions:
   - android.permission.SCHEDULE_EXACT_ALARM
   - com.android.alarm.permission.SET_ALARM
   - android.permission.FOREGROUND_SERVICE
-
-bundles:
-  - url: https://raw.githubusercontent.com/hxreborn/morphe-patches/main/patches-bundle.json
-    label: HXReborn
-    patches:
-      - Remove Ads
-      - Disable Analytics
-  - url: https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/main/patches-bundle.json
-    label: Nai64
-    patches:
-      - Remove Ads
-      - Disable Analytics
-      - Empty Clipboard Report
