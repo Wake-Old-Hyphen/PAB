@@ -230,7 +230,8 @@ def normalize_v2(raw):
         apk = {"source": {"upload": "upload", "apkeep": "apkeep", "github-releases": "github-rel"}.get(kind, kind),
                "package": app.get("package", ""), "arch": app.get("arch", "arm64-v8a"),
                "upload_tag": src.get("tag", ""), "gh_repo": src.get("repo", ""),
-               "gh_assets": src.get("assets") or [], "fallback": src.get("fallback", "")}
+               "gh_assets": src.get("assets") or [], "fallback": src.get("fallback", ""),
+               "fallbacks": src.get("fallbacks") or []}
         ae = apps_out.setdefault(app_id, {
             "id": app_id, "output_base": app.get("output_base") or app_id.title(),
             "density": app.get("density") or d.get("density") or ["xxhdpi"],
@@ -291,6 +292,18 @@ def parse_patches_info(bundles):
             vs = {v.strip() for v in line.split(":", 1)[1].split(",") if v.strip()}
             tgt = cur_pkg or (cur["packages"][-1] if cur["packages"] else None)
             if tgt and vs: cur["versions"].setdefault(tgt, set()).update(vs)
+        elif line.startswith("Compatible packages:"):
+            val = line.split(":", 1)[1].strip()
+            mpar = re.search(r"\(([^)]*)\)", val)
+            pkg = val[:mpar.start()].strip() if mpar else val
+            if pkg:
+                cur_pkg = pkg
+                cur["packages"].append(pkg)
+                if mpar:
+                    vs = {v.strip() for v in mpar.group(1).split(",") if v.strip()}
+                    if vs: cur["versions"].setdefault(pkg, set()).update(vs)
+        elif re.fullmatch(r"\d+(?:\.\d+)+", line) and cur_pkg:
+            cur["versions"].setdefault(cur_pkg, set()).add(line)
         elif line.startswith("Key:"):
             cur["last_key"] = line.split(":", 1)[1].strip()
             if pending_required: cur["required_opts"].append(cur["last_key"]); pending_required = False
@@ -344,7 +357,14 @@ def source_has_version(apk_spec, ver):
 def resolve_variant(v, apk_spec):
     pol = str(v.get("_policy") or "pin")
     pkg = apk_spec.get("package", "")
-    if pol == "latest": return "latest", "store-latest via apkeep"
+    if pol == "latest":
+        if apk_spec.get("source") == "github-rel" and apk_spec.get("gh_repo"):
+            try:
+                rel = gh_api_get(f"https://api.github.com/repos/{apk_spec['gh_repo']}/releases/latest").json()
+                tag = (rel.get("tag_name") or "").lstrip("v")
+                if tag: return tag, f"github-latest={tag} ({apk_spec['gh_repo']})"
+            except Exception: pass
+        return "latest", "store-latest via apkeep"
     if pol not in ("follow", "follow_any", "latest_available"):
         return pol, f"pinned {pol}"
     declared = {}
@@ -480,10 +500,16 @@ def ensure_apkeep():
     os.chmod(path, 0o755)
     return path
 
-def apkeep_download(apkeep, pkg, version, arch, outdir):
+def apkeep_download(apkeep, pkg, version, arch, outdir, apkeep_source=None):
     os.makedirs(outdir, exist_ok=True)
     spec = f"{pkg}@{version}" if version and version != "latest" else pkg
-    for cmd in [[apkeep, "-a", spec, "-d", "apk-pure", "-o", f"arch={arch}", outdir], [apkeep, "-a", spec, "-o", f"arch={arch}", outdir], [apkeep, "-a", spec, outdir]]:
+    if apkeep_source == "f-droid":
+        cmds = [[apkeep, "-a", spec, "-d", "f-droid", outdir], [apkeep, "-a", spec, outdir]]
+    else:
+        cmds = [[apkeep, "-a", spec, "-d", "apk-pure", "-o", f"arch={arch}", outdir],
+                [apkeep, "-a", spec, "-o", f"arch={arch}", outdir],
+                [apkeep, "-a", spec, outdir]]
+    for cmd in cmds:
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
             files = [os.path.join(outdir, f) for f in os.listdir(outdir) if os.path.isfile(os.path.join(outdir, f)) and is_zip(os.path.join(outdir, f))]
@@ -663,7 +689,9 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
         if bundle_only and k != "bundle": return None
         return k
 
-    if source == "github-rel":
+    chain = [source] + [f for f in (spec.get("fallbacks") or []) if f != source]
+
+    if "github-rel" in chain:
         repo = spec.get("gh_repo", "")
         raw = f"build/raw_{aid}_{safe_name(version)}_ghrel.bin"
         for tag in (f"v{version}", str(version)):
@@ -678,6 +706,8 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
                 if chosen: break
             if not chosen:
                 chosen = next((a for a in assets if a.get("name", "").lower().endswith(".apk") and "arm64" in a.get("name", "").lower()), None)
+            if not chosen:
+                chosen = next((a for a in assets if a.get("name", "").lower().endswith(".apk")), None)
             if chosen:
                 try:
                     download_file(chosen["browser_download_url"], raw)
@@ -685,8 +715,9 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
                     if k: result = (raw, k)
                 except Exception as e: print(f"{aid}: github-rel asset failed: {e}")
                 break
-        RAW_CACHE[key] = result
-        return result
+        if result[0] is not None:
+            RAW_CACHE[key] = result
+            return result
 
     if not bundle_only and source == "upload":
         up_tag = (spec.get("upload_tag") or "").strip()
@@ -705,7 +736,7 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
         RAW_CACHE[key] = result
         return result
 
-    if result[0] is None and source in ("apkeep", "scraper"):
+    if result[0] is None and (source in ("apkeep", "scraper") or "scraper" in chain or "apkmirror" in chain):
         raw = f"build/raw_{aid}_{safe_name(version)}_scraper.bin"
         expected_pkg = spec.get("package", "")
         def scraper_candidates():
@@ -742,7 +773,17 @@ def fetch_raw(app, aid, version, source, bundle_only=False):
             else:
                 print(f"{aid}: {label} result not acceptable (bundle_only={bundle_only})")
 
-    if result[0] is None and source == "apkeep":
+    if result[0] is None and "f-droid" in chain:
+        try:
+            apkeep = ensure_apkeep()
+            raw = apkeep_download(apkeep, spec.get("package", ""), version, arch,
+                                  f"build/apkeep_{aid}_{safe_name(version)}_fdroid", apkeep_source="f-droid")
+            if raw:
+                k = accept(raw)
+                if k: result = (raw, k)
+        except Exception as e: print(f"{aid}: f-droid failed: {e}")
+
+    if result[0] is None and "apkeep" in chain:
         try:
             apkeep = ensure_apkeep()
             raw = apkeep_download(apkeep, spec.get("package", ""), version, arch, f"build/apkeep_{aid}_{safe_name(version)}")
@@ -1359,6 +1400,14 @@ def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_ali
                 else: os.remove(p)
         return False
 
+def format_patch_list(patches, label, threshold=10):
+    if not patches:
+        return f"\n{label}: none\n"
+    if len(patches) <= threshold:
+        return f"\n{label}:\n" + "\n".join(f"- {x}" for x in patches) + "\n"
+    return f'\n<details>\n<summary>{label} ({len(patches)} patches, click to expand)</summary>\n\n' + \
+           "\n".join(f"- {x}" for x in patches) + "\n\n</details>\n"
+
 def build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild=False, release_tag=""):
     aid = app["id"]
     spec = app["apk"]
@@ -1476,9 +1525,9 @@ def build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild=False, releas
             if bases["single"]: note += "Note: base is a single APK; no dynamic-feature splits to merge.\n"
             if keep_all_abis: note += "Note: kept all ABIs to satisfy multiArch manifest.\n"
             if fp: note += f"Signing fingerprint: {fp}\n"
-            note += "\nApplied patches:\n" + ("\n".join(f"- {x}" for x in applied) if applied else "- none") + "\n"
-            if dropped: note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
-            if missing: note += "\nRequested but NOT FOUND in any bundle:\n" + "\n".join(f"- {x}" for x in missing) + "\n"
+            note += format_patch_list(applied, "Applied patches", threshold=10)
+            note += format_patch_list(dropped, "Dropped after failure", threshold=5)
+            note += format_patch_list(missing, "Requested but NOT FOUND", threshold=5)
             if dup_skipped: note += "\nDuplicate patches skipped:\n" + "\n".join(f"- {x}" for x in dup_skipped) + "\n"
             prof = v.get("_profile")
             if prof:
@@ -1790,9 +1839,9 @@ def main():
                 else: fp = None
                 note = f"## {variant['output_name']}\nBrave version: {target_tag} (Exact Asset URL)\nPatch bundles: {dh6k_tag}, official {official_tag}\n"
                 if fp: note += f"Signing fingerprint: {fp}\n"
-                note += "\nApplied patches:\n" + ("\n".join(f"- {x}" for x in applied) if applied else "- none") + "\n"
-                if dropped: note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
-                if missing: note += "\nRequested but NOT FOUND in any bundle:\n" + "\n".join(f"- {x}" for x in missing) + "\n"
+                note += format_patch_list(applied, "Applied patches", threshold=10)
+                note += format_patch_list(dropped, "Dropped after failure", threshold=5)
+                note += format_patch_list(missing, "Requested but NOT FOUND", threshold=5)
                 note += "\nStatus: " + ("Success" if ok else "Failed") + "\n\n"
                 notes.append(note)
                 update_cache_entry(cache, vid, {"resolved": channel_latest, "config_hash": chash, "bundles": btags, "status": "success" if ok else "failed", "output": final, "release_tag": release_tag})
@@ -1816,8 +1865,8 @@ def main():
             else: fp = None
             note = f"## {variant['output_name']}\nBrave version: {tag}\nPatch bundles: {dh6k_tag}, official {official_tag}\n"
             if fp: note += f"Signing fingerprint: {fp}\n"
-            note += "\nApplied patches:\n" + ("\n".join(f"- {x}" for x in applied) if applied else "- none") + "\n"
-            if dropped: note += "\nDropped after failure:\n" + "\n".join(f"- {x}" for x in dropped) + "\n"
+            note += format_patch_list(applied, "Applied patches", threshold=10)
+            note += format_patch_list(dropped, "Dropped after failure", threshold=5)
             note += "\nStatus: " + ("Best effort" if best_effort else "Success") + "\n\n"
             notes.append(note)
             BUILT.append({"id": vid, "output": final})
@@ -1827,7 +1876,11 @@ def main():
 
     skip_section = ""
     if SKIPPED:
-        skip_section = "\n\n## Skipped (unchanged)\n" + "\n".join(f"- **{s['id']}**: {s['reason']}" for s in SKIPPED) + "\n"
+        if len(SKIPPED) > 5:
+            skip_section = f'\n\n## Skipped (unchanged)\n<details>\n<summary>{len(SKIPPED)} variants skipped (click to expand)</summary>\n\n' + \
+                          "\n".join(f"- **{s['id']}**: {s['reason']}" for s in SKIPPED) + "\n\n</details>\n"
+        else:
+            skip_section = "\n\n## Skipped (unchanged)\n" + "\n".join(f"- **{s['id']}**: {s['reason']}" for s in SKIPPED) + "\n"
     head = f"# Morphe AutoBuilds Release\n\nBuilt: {len(BUILT)} · Skipped: {len(SKIPPED)}\n\n## Version resolution\n"
     with open("release_notes.md", "w") as f:
         f.write(head + "\n".join(RESOLUTION) + skip_section + "\n\n" + "".join(notes))
