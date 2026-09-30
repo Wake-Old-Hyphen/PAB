@@ -1,0 +1,12 @@
+# Shared 10-permission allowlist for ALL TikTok builds (no clone, no rename)
+strip_permissions:
+  - android.permission.MODIFY_AUDIO_SETTINGS
+  - android.permission.FOREGROUND_SERVICE
+  - android.permission.INTERNET
+  - android.permission.READ_EXTERNAL_STORAGE
+  - android.permission.FOREGROUND_SERVICE_DATA_SYNC
+  - android.permission.WRITE_EXTERNAL_STORAGE
+  - android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK
+  - android.permission.ACCESS_WIFI_STATE
+  - android.permission.WAKE_LOCK
+  - android.permission.ACCESS_NETWORK_STATE
