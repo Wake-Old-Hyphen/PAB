@@ -1,5 +1,5 @@
 # ============================================================
-# PAB config v2 — version-sync aware
+# PAB config v2 — Final State
 # ============================================================
 meta:
   version: 2
@@ -66,9 +66,14 @@ apps:
     keep_all_abis: true
   windscribe: {package: com.windscribe.vpn,    source: {kind: apkeep}, version_policy: latest, density: ["332dpi", "xhdpi", "xxhdpi"]}
   protonmail: {package: ch.protonmail.android, source: {kind: apkeep}, version_policy: latest, density: ["332dpi", "xhdpi", "xxhdpi"]}
-  protonvpn:  {package: ch.protonvpn.android,  source: {kind: apkeep}, version_policy: latest, density: ["332dpi", "xhdpi", "xxhdpi"]}
-  
-  # NEW: Mindicator App Registry Entry
+  protonvpn:
+    package: ch.protonvpn.android
+    source:
+      kind: github-releases
+      repo: ProtonVPN/android-app
+      fallbacks: ["f-droid", "apkeep"]
+    version_policy: latest
+    density: ["332dpi", "xhdpi", "xxhdpi"]
   mindicator:
     package: com.mobond.mindicator
     source: {kind: apkeep}
@@ -143,40 +148,64 @@ builds:
       "Locale PAK Slimmer": {locales: "en-US"}
       "Change app icon": {customIcon: "assets/isoamoledbraveicon.png"}
 
-  # ===== TikTok =====
+  # ===== TikTok (4 builds, NO clone, 10-perm strip, latest suggested) =====
   - id: tiktok-hushfeed
     app: tiktok
     version: latest_available
+    profile: tiktok-minimal-perms
     bundles:
-      - hushfeed: {authority: true}
+      - hushfeed-mine: {authority: true}
       - nai64-extra: {patches: ["Empty Clipboard Report"]}
 
   - id: tiktok-kveld9
     app: tiktok
     version: latest_available
-    bundles:
-      - kveld9: {authority: true}
-      - nai64-extra: {patches: ["Empty Clipboard Report"]}
-
-  - id: tiktok-kveld9-custom
-    app: tiktok
-    version: "47.0.3"
+    profile: tiktok-minimal-perms
     bundles:
       - kveld9:
           authority: true
           patches:
             - APK Junk Cleaner
+            - Always Show Publish Date
+            - Auto-Pause First Video
+            - Auto-Translate Comments
+            - Background Sync & JobScheduler Purge
             - Bypass Mandatory Login
+            - Bypass Screen Capture Detection
             - Clean Share URL
             - Client-Side AI & Behavioral Profiling Governor
+            - Comment Sort Controls
+            - Copy Comments Without Username
             - Core Asset De-bloat
+            - Custom Offline Videos Limit
+            - Custom Share Sheet
             - DPI Resource Slimmer
             - Device Privacy Guard
+            - Disable Comment Suggested Emojis
+            - Disable Double Tap to Like
+            - Disable Profile Photo LIVE Status
             - Disable Push Notifications
+            - Disable Search History Recording
+            - Disable Search Video Autoplay
+            - Disable Story Feed Indicators
+            - Disable Watch History Recording
+            - Display Refresh Rate Governor
+            - Enable Voice Comments
             - Feed Ad Blocker
             - Feed Bloat & Distraction Blocker
             - Feed Live Stream Blocker
+            - Fix Google Login
+            - Force Auto-Scroll
+            - Hide AI-Generated Content
+            - Hide Community Tab
+            - Hide Feed Search Bar
+            - Hide Nearby Feed Tab
+            - Hide Popular Lives In Search
+            - Hide Profile Photo Follow Button
+            - Hide Seen Videos
+            - Hide Suggested Searches
             - Hide TikTok Shop & Mall
+            - Hide Top-Left LIVE Button
             - In-App Browser Privacy Guard
             - Instant Launch & Splash Blocker
             - Language Pack Purger
@@ -188,71 +217,103 @@ builds:
             - PNG Asset Optimizer
             - Playback Speed Persistence
             - Resource & Battery Governor
+            - Resume Video After Scroll
             - SIM Region Selector
+            - Show Seekbar
             - Skip First-Launch Onboarding
+            - Stop Video Looping
             - Studio & Creation De-bloat
             - Unified Telemetry & Tracker Silencer
+            - Universal Native Binary Trimmer
+            - Universal Telemetry Neutralizer
+            - Universal WebP Asset Optimizer
             - Update Prompt Suppressor
             - Video Quality Governor
-    options:
-      "DPI Resource Slimmer": {dpi: "xxhdpi"}
-      "Language Pack Purger": {languages: "en"}
-      "Locale Resource Slimmer": {locales: "en"}
-      "SIM Region Selector": {region: "CH"}
-      "Video Quality Governor": {resolution: "1080"}
-
-  - id: tiktok-privacy
-    app: tiktok
-    version: "47.0.3"
-    profile: tiktok-hushfeed-privacy
-    clone: com.tiktok.zixmophe
-    name: TikTok Privacy
-    bundles:
-      - hushfeed-mine: {authority: true}
-
-  - id: tiktok-46.2.3-hxreborn
-    app: tiktok
-    version: "46.2.3"
-    bundles:
-      - hxreborn: {authority: true}
       - nai64-extra: {patches: ["Empty Clipboard Report"]}
+    options:
+      "Background Sync & JobScheduler Purge":
+        "Strip RECEIVE_BOOT_COMPLETED Permission": true
+        "Disable Boot & Package Receivers": true
+        "Disable WorkManager & Job Schedulers": true
+        "Strip WAKE_LOCK Permission": false
+      "Custom Offline Videos Limit":
+        "Custom Offline Videos Limit": 1000
+      "Custom Share Sheet":
+        "Hide WhatsApp": true
+        "Hide Instagram": true
+        "Hide Facebook & Messenger": true
+        "Hide Telegram": true
+        "Hide X / Twitter": true
+        "Hide Snapchat": true
+        "Hide Reddit & Discord": true
+        "Hide SMS & Messages": true
+        "Hide Secondary Networks": true
+        "Hide 'Repost' Button": true
+        "Hide QR Code": true
+        "Hide 'Copy Link'": false
+        "Hide System Share ('More')": false
+        "Hide Friends / Direct Messages Row": true
+        "Hide 'Promote' Action": true
+        "Hide 'Why This Video'": true
+        "Hide 'Create Group' Action": true
+        "Hide 'Add to Story'": true
+        "Hide 'Create Sticker'": true
+        "Hide 'Duet' Action": true
+        "Hide 'Stitch' Action": true
+        "Hide 'Picture-in-Picture' (PiP)": false
+        "Hide 'Clear Display'": false
+        "Hide 'Background Audio'": false
+        "Hide Live Wallpaper & GIF": false
+        "Hide 'Not Interested'": false
+        "Hide 'Report'": false
+      "DPI Resource Slimmer":
+        "DPI densities to keep": "xxhdpi"
+      "Display Refresh Rate Governor":
+        "Target Refresh Rate": "max"
+      "Hide TikTok Shop & Mall":
+        "Hide Shop Navigation Tab": true
+        "Hide Video Product Anchors": true
+      "Language Pack Purger":
+        "Languages to keep": "en"
+      "Locale Resource Slimmer":
+        "Locales to keep": "en"
+      "SIM Region Selector":
+        "Spoofed Region ISO Code": "CH"
+      "Universal Native Binary Trimmer":
+        "Trim Crash Reporting Libraries": true
+        "Trim Debug & Profiling Libraries": true
+      "Universal Telemetry Neutralizer":
+        "Revoke Advertising & Tracking Permissions": true
+        "Disable Telemetry ContentProviders": true
+        "Disable Telemetry Background Services": true
+        "Disable Telemetry Receivers": true
+        "Inject Telemetry Opt-Out Flags": true
+        "Disable Firebase Init Provider": false
+      "Universal WebP Asset Optimizer":
+        "Strip EXIF Metadata": true
+        "Strip XMP Metadata": true
+        "Strip ICC Color Profiles": false
+      "Video Quality Governor":
+        "Maximum Playback Resolution": "maxQuality"
+        "Maximum Download Resolution": 1080
 
-  - id: tiktok-46.2.3-icysymmetra
+  - id: tiktok-icysymmetra
     app: tiktok
-    version: "46.2.3"
+    version: latest_available
+    profile: tiktok-minimal-perms
     bundles:
       - icysymmetra: {authority: true}
       - nai64-extra: {patches: ["Empty Clipboard Report"]}
 
-  - id: tiktok-46.2.3-hushfeed
+  - id: tiktok-hxreborn
     app: tiktok
-    version: "46.2.3"
+    version: latest_available
+    profile: tiktok-minimal-perms
     bundles:
-      - hushfeed: {authority: true}
+      - hxreborn: {authority: true}
       - nai64-extra: {patches: ["Empty Clipboard Report"]}
 
-  - id: tiktok-46.7.3-hushfeed
-    app: tiktok
-    version: "46.7.3"
-    bundles:
-      - hushfeed: {authority: true}
-      - nai64-extra: {patches: ["Empty Clipboard Report"]}
-
-  - id: tiktok-46.8.3-hushfeed
-    app: tiktok
-    version: "46.8.3"
-    bundles:
-      - hushfeed: {authority: true}
-      - nai64-extra: {patches: ["Empty Clipboard Report"]}
-
-  - id: tiktok-46.9.3-hushfeed
-    app: tiktok
-    version: "46.9.3"
-    bundles:
-      - hushfeed: {authority: true}
-      - nai64-extra: {patches: ["Empty Clipboard Report"]}
-
-  # ===== Reddit (single-authority pair) =====
+  # ===== Reddit =====
   - id: reddit-morphe
     app: reddit
     version: follow
@@ -269,7 +330,7 @@ builds:
     bundles:
       - adobo: {authority: true}
 
-  # ===== YouTube family =====
+  # ===== YouTube / Google family =====
   - id: youtube-morphe
     app: youtube
     version: "21.13.164"
@@ -278,7 +339,7 @@ builds:
 
   - id: youtube-anddea
     app: youtube
-    version: "21.07.247"
+    version: follow
     clone: anddea.youtube.zix
     name: YouTube RVX
     exclude: ["Spoof signature", "Change version code"]
@@ -306,7 +367,7 @@ builds:
     clone: com.google.android.apps.bard.morphe
     bundles: [gemini-microg, morphe]
 
-  # ===== VPN / Mail =====
+  # ===== VPN / Mail / Utility =====
   - id: windscribe-microg
     app: windscribe
     version: latest
@@ -322,11 +383,42 @@ builds:
     app: protonvpn
     version: latest
     bundles:
-      - rushiranpise: {patches: ["Unlock VPN Plus"]}
-      - kondratjev: {patches: ["Disable analytics"]}
-      - paresh: {patches: ["Disable telemetry"]}
+      - hxreborn:
+          authority: true
+          patches:
+            - AMOLED dark theme
+            - Custom accent color
+            - Disable telemetry
+            - Hide upgrade promotions
+            - Override certificate pinning
+            - Remove server change delay
+            - Show free server locations
+            - Unlock LAN connections
+            - Unlock NetShield
+            - Unlock connection preferences
+            - Unlock custom DNS
+            - Unlock profiles
+            - Unlock split tunneling
+      - kveld9:
+          patches:
+            - Background Sync & JobScheduler Purge
+            - DPI Resource Slimmer
+            - Locale Resource Slimmer
+            - PNG Asset Optimizer
+            - Universal Native Binary Trimmer
+            - Universal Telemetry Neutralizer
+            - Universal WebP Asset Optimizer
+    options:
+      "Background Sync & JobScheduler Purge":
+        "Strip RECEIVE_BOOT_COMPLETED Permission": true
+        "Disable Boot & Package Receivers": true
+        "Disable WorkManager & Job Schedulers": true
+        "Strip WAKE_LOCK Permission": false
+      "DPI Resource Slimmer":
+        "DPI densities to keep": "xxhdpi"
+      "Locale Resource Slimmer":
+        "Locales to keep": "en"
 
-  # ===== NEW: Mindicator Build Entry =====
   - id: mindicator-clean
     app: mindicator
     version: latest
