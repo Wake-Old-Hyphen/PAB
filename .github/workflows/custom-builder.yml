@@ -22,6 +22,7 @@ on:
           - protonvpn
           - brave
           - reddit
+          - mindicator
       package_name:
         description: 'Package name (blank = default for app, or profile value)'
         required: false
