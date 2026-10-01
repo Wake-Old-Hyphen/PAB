@@ -13,6 +13,7 @@ import hashlib
 import subprocess
 import sys
 import time
+import calendar
 import xml.etree.ElementTree as ET
 from urllib.parse import quote_plus, urljoin
 
@@ -53,6 +54,7 @@ SKIPPED = []
 DECLARED_CACHE = {}
 TAGS_CACHE = {}
 UPLOAD_CACHE = {}
+PROBE_CACHE = {}
 SCHEMA = 2
 CACHE_SCHEMA = 1
 CACHE_FILE = ".pab-cache.json"
@@ -82,7 +84,7 @@ FGS_PERM_TO_TYPE = {
 }
 
 # ============================================================
-# PHASE 2: CACHE MANAGEMENT
+# CACHE
 # ============================================================
 def now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -118,7 +120,7 @@ def save_cache(cache):
     with open(CACHE_FILE, "w") as f:
         json.dump(cache, f, indent=2)
 
-def should_skip_variant(variant_id, cache, current):
+def should_skip_variant(variant_id, cache, current, max_age_days=0):
     if not cache or variant_id not in cache.get("variants", {}):
         return False, "no cache entry"
     entry = cache["variants"][variant_id]
@@ -126,6 +128,14 @@ def should_skip_variant(variant_id, cache, current):
         return False, "last build failed (auto-retry)"
     if entry.get("resolved") != current.get("resolved"):
         return False, f"version changed: {entry.get('resolved')} -> {current.get('resolved')}"
+    if str(current.get("resolved")) == "latest" and max_age_days:
+        try:
+            bt = time.strptime(str(entry.get("built_at", ""))[:19], "%Y-%m-%dT%H:%M:%S")
+            age = (time.time() - calendar.timegm(bt)) / 86400
+            if age >= max_age_days:
+                return False, f"refresh interval reached ({max_age_days}d)"
+        except Exception:
+            return False, "no valid built_at (refresh)"
     if entry.get("config_hash") != current.get("config_hash"):
         return False, "config changed"
     if entry.get("bundles") != current.get("bundles"):
@@ -145,7 +155,7 @@ def update_cache_entry(cache, variant_id, data):
     }
 
 # ============================================================
-# CONFIG v2 LOADER (legacy-compatible)
+# CONFIG v2 LOADER
 # ============================================================
 def gh_api_get(url, timeout=60):
     headers = dict(UA)
@@ -183,14 +193,14 @@ def _expand_bundle(ref, registry):
         if "url" in ref:
             b = {"url": normalize_bundle_url(ref["url"])}
             b["label"] = ref.get("label") or (repo_from_url(b["url"]) or "/x").split("/")[-1]
-            for k in ("patches", "options", "pin", "authority"):
+            for k in ("patches", "options", "pin", "authority", "auto_include_new"):
                 if k in ref: b[k] = ref[k]
             return b
         bid = list(ref.keys())[0]; opts = ref[bid] or {}
     else: return None
     src = registry.get(bid) or {}
     b = {"url": src.get("url", ""), "label": src.get("label") or bid}
-    for k in ("patches", "options", "pin", "authority"):
+    for k in ("patches", "options", "pin", "authority", "auto_include_new"):
         if k in opts: b[k] = opts[k]
         elif k in src: b[k] = src[k]
     return b if b.get("url") else None
@@ -201,7 +211,7 @@ def normalize_v2(raw):
     for bid, b in (raw.get("bundles") or {}).items():
         b = b if isinstance(b, dict) else {"url": b}
         entry = {"url": normalize_bundle_url(b.get("url", "")), "label": b.get("label") or bid}
-        for k in ("patches", "options", "pin", "authority"):
+        for k in ("patches", "options", "pin", "authority", "auto_include_new"):
             if k in b: entry[k] = b[k]
         registry[bid] = entry
     apps = raw.get("apps") or {}
@@ -218,6 +228,8 @@ def normalize_v2(raw):
                   "app_name": bd.get("name") or app.get("name") or "",
                   "exclude_patches": bd.get("exclude") or [], "options": bd.get("options") or {},
                   "apk_version": ver, "_policy": ver,
+                  "fallback_version": bd.get("fallback_version") or app.get("fallback_version") or "",
+                  "auto_include_new": bd.get("auto_include_new", app.get("auto_include_new", False)),
                   "_authorities": [b["label"] for b in bundles if b.get("authority")]}
         if bd.get("profile"): common["_profile"] = bd["profile"]
         if ver.startswith("channel:"):
@@ -264,46 +276,31 @@ def load_config(path="config.yaml"):
     return normalize_legacy(raw)
 
 # ============================================================
-# VERSION RESOLUTION (Phase 1)
+# VERSION RESOLUTION
 # ============================================================
 def parse_patches_info(bundles):
     cmd = ["java", "-jar", "build/cli.jar", "list-patches"]
     for b in bundles: cmd += ["-p", b]
     cmd += ["--with-packages", "--with-options", "--with-versions"]
     r = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        os.makedirs("build", exist_ok=True)
+        tag = "_".join(os.path.basename(b).replace(".mpp", "") for b in bundles)
+        with open(f"build/cli_debug_{safe_name(tag)}.txt", "w") as f:
+            f.write(r.stdout or "")
+            f.write("\n===== STDERR =====\n")
+            f.write(r.stderr or "")
+    except Exception: pass
+    PKG_RE = re.compile(r"([a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,})")
+    VER_RE = re.compile(r"(\d+\.\d+(?:\.\d+)*)")
     info, cur, pending_required, cur_pkg = [], None, False, None
-    for rawline in r.stdout.splitlines():
+    for rawline in (r.stdout or "").splitlines():
         line = rawline.strip()
         if line.startswith("Index:"):
             cur = {"name": None, "packages": [], "required_opts": [], "last_key": None, "versions": {}}
             info.append(cur); cur_pkg = None
         elif cur is None: continue
         elif line.startswith("Name:"): cur["name"] = line.split(":", 1)[1].strip()
-        elif line.startswith("Package name:"):
-            val = line.split(":", 1)[1].strip()
-            mpar = re.search(r"\(([^)]*)\)", val)
-            if mpar:
-                vs = {v.strip() for v in mpar.group(1).split(",") if v.strip()}
-                val = val[:mpar.start()].strip()
-                if vs: cur["versions"].setdefault(val, set()).update(vs)
-            cur_pkg = val
-            cur["packages"].append(val)
-        elif line.startswith("Supported versions:"):
-            vs = {v.strip() for v in line.split(":", 1)[1].split(",") if v.strip()}
-            tgt = cur_pkg or (cur["packages"][-1] if cur["packages"] else None)
-            if tgt and vs: cur["versions"].setdefault(tgt, set()).update(vs)
-        elif line.startswith("Compatible packages:"):
-            val = line.split(":", 1)[1].strip()
-            mpar = re.search(r"\(([^)]*)\)", val)
-            pkg = val[:mpar.start()].strip() if mpar else val
-            if pkg:
-                cur_pkg = pkg
-                cur["packages"].append(pkg)
-                if mpar:
-                    vs = {v.strip() for v in mpar.group(1).split(",") if v.strip()}
-                    if vs: cur["versions"].setdefault(pkg, set()).update(vs)
-        elif re.fullmatch(r"\d+(?:\.\d+)+", line) and cur_pkg:
-            cur["versions"].setdefault(cur_pkg, set()).add(line)
         elif line.startswith("Key:"):
             cur["last_key"] = line.split(":", 1)[1].strip()
             if pending_required: cur["required_opts"].append(cur["last_key"]); pending_required = False
@@ -311,6 +308,33 @@ def parse_patches_info(bundles):
             req = line.split(":", 1)[1].strip().lower() == "true"
             if req and cur.get("last_key"): cur["required_opts"].append(cur["last_key"])
             else: pending_required = req
+        elif line.startswith(("Package name:", "Compatible packages:")):
+            val = line.split(":", 1)[1].strip()
+            mpar = re.search(r"\(([^)]*)\)", val)
+            if mpar:
+                vs = set(VER_RE.findall(mpar.group(1)))
+                val = val[:mpar.start()].strip()
+                if vs and val: cur["versions"].setdefault(val, set()).update(vs)
+            pm = PKG_RE.search(val)
+            if pm:
+                cur_pkg = pm.group(1)
+                if cur_pkg not in cur["packages"]: cur["packages"].append(cur_pkg)
+        elif line.startswith("Supported versions:"):
+            vs = {v.strip() for v in line.split(":", 1)[1].split(",") if v.strip()}
+            if vs and cur_pkg: cur["versions"].setdefault(cur_pkg, set()).update(vs)
+        else:
+            pm = PKG_RE.search(line)
+            if pm and re.fullmatch(r"[\w.]+:?", line):
+                cur_pkg = pm.group(1)
+                if cur_pkg not in cur["packages"]: cur["packages"].append(cur_pkg)
+            elif re.fullmatch(r"[\d][\d.,\s]*", line):
+                vs = set(VER_RE.findall(line))
+                if vs and cur_pkg: cur["versions"].setdefault(cur_pkg, set()).update(vs)
+            elif "version" in line.lower() and ":" in line:
+                vs = set(VER_RE.findall(line))
+                pm2 = PKG_RE.search(line)
+                tgt = pm2.group(1) if pm2 else cur_pkg
+                if vs and tgt: cur["versions"].setdefault(tgt, set()).update(vs)
     return [x for x in info if x.get("name")]
 
 def declared_versions(mpp, package):
@@ -344,6 +368,28 @@ def upload_names(tag):
         UPLOAD_CACHE[tag] = names
     return UPLOAD_CACHE[tag]
 
+def probe_store_version(apk_spec):
+    pkg = apk_spec.get("package", "")
+    if not pkg: return None
+    if pkg in PROBE_CACHE: return PROBE_CACHE[pkg]
+    ver = None
+    names = [pkg.split(".")[-1], pkg.replace(".", "-")]
+    for host in ("apkpure.net", "apkpure.com"):
+        for n in names:
+            html = cf_get(f"https://{host}/{n}/{pkg}", timeout=20)
+            if not html: continue
+            m = re.search(r'"softwareVersion"\s*:\s*"([\d][\d.]*)"', html) or re.search(r'"version"\s*:\s*"([\d][\d.]*)"', html)
+            if m: ver = m.group(1); break
+        if ver: break
+    if not ver:
+        for slug in names:
+            html = cf_get(f"https://{slug}.en.uptodown.com/android", timeout=20)
+            if not html: continue
+            m = re.search(r"version[\"'>\s]+([\d][\d.]*)", html, re.I)
+            if m: ver = m.group(1); break
+    PROBE_CACHE[pkg] = ver
+    return ver
+
 def source_has_version(apk_spec, ver):
     kind = apk_spec.get("source")
     if kind == "upload":
@@ -364,7 +410,9 @@ def resolve_variant(v, apk_spec):
                 tag = (rel.get("tag_name") or "").lstrip("v")
                 if tag: return tag, f"github-latest={tag} ({apk_spec['gh_repo']})"
             except Exception: pass
-        return "latest", "store-latest via apkeep"
+        probe = probe_store_version(apk_spec)
+        if probe: return probe, f"store-latest={probe} (probed)"
+        return "latest", "store-latest via apkeep (probe failed; age-refresh applies)"
     if pol not in ("follow", "follow_any", "latest_available"):
         return pol, f"pinned {pol}"
     declared = {}
@@ -411,6 +459,9 @@ def preflight(cfg):
             pol = str(v.get("_policy") or "")
             if pol in ("follow", "follow_any", "latest_available", "latest"):
                 ver, why = resolve_variant(v, ae["apk"])
+                if ver is None and str(v.get("fallback_version") or "").strip():
+                    why = f"FALLBACK {v['fallback_version']} used because: {why}"
+                    ver = str(v["fallback_version"])
                 RESOLUTION.append(f"- {v['id']}: {why}")
                 if ver is None: v["_skip"] = why
                 else: v["apk_version"] = ver; v["_resolved_why"] = why
@@ -1408,7 +1459,7 @@ def format_patch_list(patches, label, threshold=10):
     return f'\n<details>\n<summary>{label} ({len(patches)} patches, click to expand)</summary>\n\n' + \
            "\n".join(f"- {x}" for x in patches) + "\n\n</details>\n"
 
-def build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild=False, release_tag=""):
+def build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild=False, release_tag="", global_excludes=None, max_age_days=0):
     aid = app["id"]
     spec = app["apk"]
     arch = spec.get("arch", "arm64-v8a")
@@ -1446,7 +1497,7 @@ def build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild=False, releas
         bundles_tags = {b.get("label"): str(b.get("_ver", "?")).lstrip("v") for b in v["bundles"]}
         config_hash = compute_config_hash(v)
         resolved = str(v.get("apk_version") or spec.get("version") or "latest")
-        skip, reason = should_skip_variant(vid, cache, {"resolved": resolved, "config_hash": config_hash, "bundles": bundles_tags})
+        skip, reason = should_skip_variant(vid, cache, {"resolved": resolved, "config_hash": config_hash, "bundles": bundles_tags}, max_age_days=max_age_days)
         if skip and not force_rebuild:
             SKIPPED.append({"id": vid, "reason": reason})
             notes.append(f"## {vid}\nStatus: Skipped (unchanged)\nReason: {reason}\n\n")
@@ -1472,23 +1523,28 @@ def build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild=False, releas
             update_cache_entry(cache, vid, {"resolved": resolved, "config_hash": config_hash, "bundles": bundles_tags, "status": "failed", "release_tag": release_tag})
             continue
 
+        excl_var = {clean_name(x).lower() for x in (v.get("exclude_patches") or [])}
+        excl_glob = set(global_excludes or [])
         per_bundle, seen_lower, dup_skipped = [], set(), []
         for i, g in enumerate(gen):
             bundle_cfg = v.get("bundles", [])[i] if i < len(v.get("bundles", [])) else {}
             allow = bundle_cfg.get("patches")
             allow_l = {clean_name(x).lower() for x in allow} if allow else None
+            auto_new = bool(bundle_cfg.get("auto_include_new")) or bool(v.get("auto_include_new"))
             wanted = {}
             for name in sorted((g.get("patches") or {}).keys()):
                 nl = clean_name(name).lower()
-                if allow_l is not None and nl not in allow_l: continue
+                if allow_l is not None and nl not in allow_l:
+                    if not auto_new: continue
+                    if nl in excl_glob or nl in excl_var: continue
                 if v.get("merge_exclusive") and nl in seen_lower: dup_skipped.append(name); continue
                 wanted[name] = {}
                 seen_lower.add(nl)
             per_bundle.append(wanted)
-        excludes = {clean_name(x).lower() for x in v.get("exclude_patches", [])}
         for d in per_bundle:
             for n in list(d):
-                if clean_name(n).lower() in excludes: del d[n]
+                if clean_name(n).lower() in excl_var: del d[n]
+
         for patch_name, opts in (v.get("options") or {}).items():
             pl = clean_name(patch_name).lower()
             for i, g in enumerate(gen):
@@ -1553,7 +1609,7 @@ def build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild=False, releas
 
 def main():
     # ==========================================
-    # 🚀 CUSTOM BUILD MODE (no cache, unchanged) 🚀
+    # 🚀 CUSTOM BUILD MODE (no cache) 🚀
     # ==========================================
     if os.environ.get("CUSTOM_BUILD"):
         print("🚀 RUNNING IN CUSTOM BUILD MODE 🚀")
@@ -1683,7 +1739,8 @@ def main():
         alias = detect_alias(); ks_fp = keystore_fingerprint(alias); get_latest_cli_jar()
         notes = []
         for app in config.get("extra_apps", []):
-            build_extra_app(app, alias, ks_fp, notes, {"variants": {}}, force_rebuild=True, release_tag="")
+            build_extra_app(app, alias, ks_fp, notes, {"variants": {}}, force_rebuild=True, release_tag="",
+                            global_excludes=config.get("exclude_patches", []))
 
         if profile and profile.get("strip_permissions"):
             allowlist = [clean_name(p) for p in profile["strip_permissions"]]
@@ -1733,6 +1790,7 @@ def main():
 
     cache = load_cache()
     force_rebuild = "--force-rebuild" in sys.argv
+    refresh_days = int((config.get("_defaults") or {}).get("refresh_after_days", 7) or 0)
     release_tag = "build-" + time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     with open("build/release_tag.txt", "w") as f: f.write(release_tag)
 
@@ -1872,7 +1930,8 @@ def main():
             BUILT.append({"id": vid, "output": final})
             update_cache_entry(cache, vid, {"resolved": channel_latest, "config_hash": chash, "bundles": btags, "status": "success", "output": final, "release_tag": release_tag})
     for app in config.get("extra_apps", []):
-        build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild, release_tag)
+        build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild, release_tag,
+                        global_excludes=config.get("exclude_patches", []), max_age_days=refresh_days)
 
     skip_section = ""
     if SKIPPED:
