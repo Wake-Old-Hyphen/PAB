@@ -1,5 +1,5 @@
 # ============================================================
-# PAB config v2 — Final State
+# PAB config v2 — final state
 # ============================================================
 meta:
   version: 2
@@ -13,6 +13,7 @@ defaults:
   languages: ["en"]
   keep_all_abis: false
   version_policy: pin
+  refresh_after_days: 7
 
 # ---------- BUNDLE REGISTRY ----------
 bundles:
@@ -114,6 +115,8 @@ builds:
   - id: brave-mono
     app: brave
     version: follow
+    fallback_version: "1.96.60"
+    auto_include_new: true
     clone: com.brave.mono
     name: Brave Mono
     bundles:
@@ -148,10 +151,11 @@ builds:
       "Locale PAK Slimmer": {locales: "en-US"}
       "Change app icon": {customIcon: "assets/isoamoledbraveicon.png"}
 
-  # ===== TikTok (4 builds, NO clone, 10-perm strip, latest suggested) =====
+  # ===== TikTok (one per bundle, latest suggested, no clone, 10-perm strip) =====
   - id: tiktok-hushfeed
     app: tiktok
     version: latest_available
+    fallback_version: "47.1.3"
     profile: tiktok-minimal-perms
     bundles:
       - hushfeed-mine: {authority: true}
@@ -160,10 +164,12 @@ builds:
   - id: tiktok-kveld9
     app: tiktok
     version: latest_available
+    fallback_version: "47.1.4"
     profile: tiktok-minimal-perms
     bundles:
       - kveld9:
           authority: true
+          auto_include_new: true
           patches:
             - APK Junk Cleaner
             - Always Show Publish Date
@@ -340,11 +346,12 @@ builds:
   - id: youtube-anddea
     app: youtube
     version: follow
+    fallback_version: "21.13.164"
     clone: anddea.youtube.zix
     name: YouTube RVX
     exclude: ["Spoof signature", "Change version code"]
     bundles:
-      - anddea: {authority: true}
+      - anddea: {authority: true, auto_include_new: true}
     options:
       "Custom branding": {appName: "YouTube RVX"}
       "GmsCore support": {checkGmsCore: true, packageNameYouTube: "anddea.youtube.zix", patchAllManifests: true}
@@ -372,7 +379,7 @@ builds:
     app: windscribe
     version: latest
     bundles:
-      - rushiranpise: {patches: ["GmsCore support (MicroG)", "Unlock Premium"]}
+      - rushiranpise: {auto_include_new: true, patches: ["GmsCore support (MicroG)", "Unlock Premium"]}
 
   - id: protonmail-patched
     app: protonmail
@@ -382,6 +389,7 @@ builds:
   - id: protonvpn-patched
     app: protonvpn
     version: latest
+    auto_include_new: true
     bundles:
       - hxreborn:
           authority: true
@@ -424,5 +432,5 @@ builds:
     version: latest
     profile: mindicator-minimal
     bundles:
-      - hxreborn: {authority: true, patches: ["Remove Ads", "Disable Analytics"]}
+      - hxreborn: {authority: true, auto_include_new: true, patches: ["Remove Ads", "Disable Analytics"]}
       - nai64-extra: {patches: ["Remove Ads", "Disable Analytics", "Empty Clipboard Report"]}
