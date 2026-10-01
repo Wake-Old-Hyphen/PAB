@@ -1,6 +1,6 @@
 apk_version: latest
 source: apkeep
-# No clone_package or app_name defined -> keeps original com.mobond.mindicator
+# No clone_package or app_name -> keeps original com.mobond.mindicator identity
 
 strip_permissions:
   - android.permission.ACCESS_NETWORK_STATE
