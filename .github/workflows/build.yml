@@ -19,7 +19,7 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "0 6 * * *"
+    - cron: "0 6 * * *"   # adjust to your preferred schedule
 
 permissions:
   contents: write
@@ -75,6 +75,7 @@ jobs:
           path: |
             plan.json
             resolution_report.md
+            build/cli_debug_*.txt
           retention-days: 14
 
       - name: Restore build cache
