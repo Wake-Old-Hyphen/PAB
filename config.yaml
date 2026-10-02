@@ -1,6 +1,3 @@
-# ============================================================
-# PAB config v2 — final state
-# ============================================================
 meta:
   version: 2
   resolution_report: true
@@ -41,8 +38,8 @@ apps:
     density: ["nodpi"]
   brave:
     package: com.brave.browser
-    source: {kind: github-releases, repo: brave/brave-browser, assets: ["Bravemonoarm64.apk", "BraveMonoarm.apk"]}
-    version_policy: follow
+    source: {kind: github-releases, repo: brave/brave-browser}
+    version_policy: latest
   reddit:
     package: com.reddit.frontpage
     source: {kind: apkeep, fallback: apkmirror}
@@ -69,10 +66,7 @@ apps:
   protonmail: {package: ch.protonmail.android, source: {kind: apkeep}, version_policy: latest, density: ["332dpi", "xhdpi", "xxhdpi"]}
   protonvpn:
     package: ch.protonvpn.android
-    source:
-      kind: github-releases
-      repo: ProtonVPN/android-app
-      fallbacks: ["f-droid", "apkeep"]
+    source: {kind: github-releases, repo: ProtonVPN/android-app, fallbacks: ["f-droid", "apkeep"]}
     version_policy: latest
     density: ["332dpi", "xhdpi", "xxhdpi"]
   mindicator:
@@ -83,75 +77,202 @@ apps:
 
 # ---------- BUILD LIST ----------
 builds:
-  # ===== Brave =====
-  - id: brave-origin-stable
-    app: brave
-    version: "channel:stable"
-    output_name: Brave-Origin-Stable
-    clone: com.brave.browser
-    name: Brave Origin
-    bundles: [dh6k, morphe]
-
-  - id: brave-o2
-    app: brave
-    version: "channel:stable"
-    output_name: BraveO2-Stable
-    clone: com.brave.origin
-    name: BraveO²
-    bundles: [dh6k, morphe]
-
-  - id: brave-nightly
-    app: brave
-    version: "channel:nightly"
-    output_name: Brave-Nightly
-    bundles: [dh6k, morphe]
-
-  - id: brave-beta
-    app: brave
-    version: "channel:beta"
-    output_name: Brave-Beta
-    bundles: [dh6k, morphe]
-
+  # ================= BRAVE (5 builds) =================
   - id: brave-mono
     app: brave
     version: follow
     fallback_version: "1.96.60"
-    auto_include_new: true
+    gh_assets: ["Bravemonoarm64.apk"]
     clone: com.brave.mono
     name: Brave Mono
     bundles:
       - kveld9:
           authority: true
-          patches: &mono_patches
-            - Brave Origin
+          auto_include_new: false
+          patches: &brave_kveld9_full
+            - APK Junk Cleaner
+            - Background Sync & JobScheduler Purge
             - Block Brave Telemetry
-            - Clean New Tab Page
-            - Suppress In-App Promos & Surveys
             - Brave In-Product & Commercial Notification Optimizer
+            - Brave Origin
+            - Brave Startup Performance Optimization
+            - Clean New Tab Page
             - Clean Share URL
+            - DPI Resource Slimmer
             - Disable Background Sync & Periodic Sync
             - Disable Battery Status API & OS Listener
-            - Brave Startup Performance Optimization
+            - Locale PAK Slimmer
+            - Locale Resource Slimmer
+            - Native Bloat Slimmer
+            - PNG Asset Optimizer
             - Sensor Privacy Guard
             - Skip First Run
-            - Native Bloat Slimmer
-            - Locale PAK Slimmer
+            - Suppress In-App Promos & Surveys
+            - Universal Native Binary Trimmer
+            - Universal Privacy Permissions Stripper
+            - Universal Telemetry Neutralizer
+            - Universal WebP Asset Optimizer
+      - dh6k:
+          auto_include_new: false
+          patches: &brave_dh6k_origin
+            - Brave AMOLED theme
             - Change app icon
             - Change app name
-            - Clone app
+            - Custom NTP wallpaper
             - Disable analytics
+      - morphe:
+          auto_include_new: false
+          patches:
+            - Clone app
+    options: &brave_opts
+      "Brave AMOLED theme":
+        "AMOLED background": "#000000"
+        "Text color": "#f0f2ff"
+        "Accent color": "#737ade"
+        "Disable Material You dynamic colors": true
+      "Change app icon":
+        "Custom app icon": "assets/isoamoledbraveicon.png"
+      "Custom NTP wallpaper":
+        "Custom NTP wallpaper": "assets/000000.png"
+      "Clean New Tab Page":
+        "Hide Top Sites & Shortcuts": false
+      "DPI Resource Slimmer":
+        "DPI densities to keep": "xxhdpi"
+      "Locale PAK Slimmer":
+        "Locales to keep": "en-US"
+      "Locale Resource Slimmer":
+        "Locales to keep": "en"
+      "Background Sync & JobScheduler Purge":
+        "Strip RECEIVE_BOOT_COMPLETED Permission": true
+        "Disable Boot & Package Receivers": true
+        "Disable WorkManager & Job Schedulers": true
+        "Strip WAKE_LOCK Permission": false
+      "Universal Native Binary Trimmer":
+        "Trim Crash Reporting Libraries": true
+        "Trim Debug & Profiling Libraries": true
+      "Universal Privacy Permissions Stripper":
+        "Strip Notification Permission": true
+        "Strip Camera Permission": true
+        "Strip Microphone Permissions": true
+        "Strip Storage & Media Permissions": false
+        "Strip Location Permissions": true
+        "Strip Contacts & Accounts Permissions": true
+        "Strip Calendar Permissions": true
+        "Strip Nearby Devices Permissions": true
+        "Strip Body Sensors Permissions": true
+      "Universal Telemetry Neutralizer":
+        "Revoke Advertising & Tracking Permissions": true
+        "Disable Telemetry ContentProviders": true
+        "Disable Telemetry Background Services": true
+        "Disable Telemetry Receivers": true
+        "Inject Telemetry Opt-Out Flags": true
+        "Disable Firebase Init Provider": true
+      "Universal WebP Asset Optimizer":
+        "Strip EXIF Metadata": true
+        "Strip XMP Metadata": true
+        "Strip ICC Color Profiles": false
+
+  - id: brave-origin-stable
+    app: brave
+    version: follow
+    fallback_version: "1.96.60"
+    gh_assets: ["Bravearm64Universal.apk"]
+    clone: com.brave.browser
+    name: Brave Origin
+    bundles:
+      - dh6k:
+          auto_include_new: false
+          patches: *brave_dh6k_origin
+      - kveld9:
+          authority: true
+          auto_include_new: false
+          patches: &brave_kveld9_stable_universal
             - APK Junk Cleaner
+            - Background Sync & JobScheduler Purge
+            - Block Brave Telemetry
+            - Brave In-Product & Commercial Notification Optimizer
+            - Brave Startup Performance Optimization
+            - Clean Share URL
+            - DPI Resource Slimmer
+            - Disable Background Sync & Periodic Sync
+            - Disable Battery Status API & OS Listener
+            - Locale PAK Slimmer
+            - Locale Resource Slimmer
+            - Native Bloat Slimmer
+            - PNG Asset Optimizer
+            - Sensor Privacy Guard
+            - Skip First Run
+            - Suppress In-App Promos & Surveys
+            - Universal Native Binary Trimmer
+            - Universal Privacy Permissions Stripper
+            - Universal Telemetry Neutralizer
+            - Universal WebP Asset Optimizer
+    options: *brave_opts
+
+  - id: brave-o2
+    app: brave
+    version: follow
+    fallback_version: "1.96.60"
+    gh_assets: ["Bravearm64Universal.apk"]
+    clone: com.brave.origin
+    name: BraveO²
+    bundles:
+      - dh6k:
+          auto_include_new: false
+          patches: *brave_dh6k_origin
+      - kveld9:
+          auto_include_new: false
+          patches: *brave_kveld9_stable_universal
+      - morphe:
+          auto_include_new: false
+          patches:
+            - Clone app
+    options: *brave_opts
+
+  - id: brave-nightly
+    app: brave
+    version: "channel:nightly"
+    output_name: Brave-Nightly
+    gh_assets: ["Bravearm64Universal.apk"]
+    bundles:
+      - dh6k:
+          auto_include_new: false
+          patches: &brave_dh6k_nightly
+            - Brave AMOLED theme
+            - Brave Origin
+            - Brave Startup Performance Optimization
+            - Change app icon
+            - Custom NTP wallpaper
+            - Disable analytics
+      - kveld9:
+          auto_include_new: false
+          patches: &brave_kveld9_universal_only
+            - APK Junk Cleaner
+            - Background Sync & JobScheduler Purge
             - DPI Resource Slimmer
             - Locale Resource Slimmer
             - PNG Asset Optimizer
-      - dh6k:   {patches: *mono_patches}
-      - morphe: {patches: *mono_patches}
-    options:
-      "Clean New Tab Page": {hideTopSites: true}
-      "Locale PAK Slimmer": {locales: "en-US"}
-      "Change app icon": {customIcon: "assets/isoamoledbraveicon.png"}
+            - Universal Native Binary Trimmer
+            - Universal Privacy Permissions Stripper
+            - Universal Telemetry Neutralizer
+            - Universal WebP Asset Optimizer
+    options: *brave_opts
 
-  # ===== TikTok (one per bundle, latest suggested, no clone, 10-perm strip) =====
+  - id: brave-beta
+    app: brave
+    version: "channel:beta"
+    output_name: Brave-Beta
+    gh_assets: ["Bravearm64Universal.apk"]
+    bundles:
+      - dh6k:
+          auto_include_new: false
+          patches: *brave_dh6k_nightly
+      - kveld9:
+          auto_include_new: false
+          patches: *brave_kveld9_universal_only
+    options: *brave_opts
+
+  # ================= TIKTOK (4 builds) =================
   - id: tiktok-hushfeed
     app: tiktok
     version: latest_available
@@ -159,7 +280,7 @@ builds:
     profile: tiktok-minimal-perms
     bundles:
       - hushfeed-mine: {authority: true}
-      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+      - nai64-extra: {auto_include_new: false, patches: ["Empty Clipboard Report"]}
 
   - id: tiktok-kveld9
     app: tiktok
@@ -169,7 +290,6 @@ builds:
     bundles:
       - kveld9:
           authority: true
-          auto_include_new: true
           patches:
             - APK Junk Cleaner
             - Always Show Publish Date
@@ -235,7 +355,7 @@ builds:
             - Universal WebP Asset Optimizer
             - Update Prompt Suppressor
             - Video Quality Governor
-      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+      - nai64-extra: {auto_include_new: false, patches: ["Empty Clipboard Report"]}
     options:
       "Background Sync & JobScheduler Purge":
         "Strip RECEIVE_BOOT_COMPLETED Permission": true
@@ -309,7 +429,7 @@ builds:
     profile: tiktok-minimal-perms
     bundles:
       - icysymmetra: {authority: true}
-      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+      - nai64-extra: {auto_include_new: false, patches: ["Empty Clipboard Report"]}
 
   - id: tiktok-hxreborn
     app: tiktok
@@ -317,9 +437,9 @@ builds:
     profile: tiktok-minimal-perms
     bundles:
       - hxreborn: {authority: true}
-      - nai64-extra: {patches: ["Empty Clipboard Report"]}
+      - nai64-extra: {auto_include_new: false, patches: ["Empty Clipboard Report"]}
 
-  # ===== Reddit =====
+  # ================= REDDIT (2) =================
   - id: reddit-morphe
     app: reddit
     version: follow
@@ -336,7 +456,7 @@ builds:
     bundles:
       - adobo: {authority: true}
 
-  # ===== YouTube / Google family =====
+  # ================= YOUTUBE / GOOGLE (5) =================
   - id: youtube-morphe
     app: youtube
     version: "21.13.164"
@@ -351,7 +471,7 @@ builds:
     name: YouTube RVX
     exclude: ["Spoof signature", "Change version code"]
     bundles:
-      - anddea: {authority: true, auto_include_new: true}
+      - anddea: {authority: true}
     options:
       "Custom branding": {appName: "YouTube RVX"}
       "GmsCore support": {checkGmsCore: true, packageNameYouTube: "anddea.youtube.zix", patchAllManifests: true}
@@ -374,12 +494,12 @@ builds:
     clone: com.google.android.apps.bard.morphe
     bundles: [gemini-microg, morphe]
 
-  # ===== VPN / Mail / Utility =====
+  # ================= VPN / MAIL / UTILITY (4) =================
   - id: windscribe-microg
     app: windscribe
     version: latest
     bundles:
-      - rushiranpise: {auto_include_new: true, patches: ["GmsCore support (MicroG)", "Unlock Premium"]}
+      - rushiranpise: {patches: ["GmsCore support (MicroG)", "Unlock Premium"]}
 
   - id: protonmail-patched
     app: protonmail
@@ -389,7 +509,6 @@ builds:
   - id: protonvpn-patched
     app: protonvpn
     version: latest
-    auto_include_new: true
     bundles:
       - hxreborn:
           authority: true
@@ -432,5 +551,5 @@ builds:
     version: latest
     profile: mindicator-minimal
     bundles:
-      - hxreborn: {authority: true, auto_include_new: true, patches: ["Remove Ads", "Disable Analytics"]}
-      - nai64-extra: {patches: ["Remove Ads", "Disable Analytics", "Empty Clipboard Report"]}
+      - hxreborn: {authority: true, patches: ["Remove Ads", "Disable Analytics"]}
+      - nai64-extra: {auto_include_new: false, patches: ["Remove Ads", "Disable Analytics", "Empty Clipboard Report"]}
