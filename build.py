@@ -195,6 +195,7 @@ def _expand_bundle(ref, registry):
             b["label"] = ref.get("label") or (repo_from_url(b["url"]) or "/x").split("/")[-1]
             for k in ("patches", "options", "pin", "authority", "auto_include_new"):
                 if k in ref: b[k] = ref[k]
+            b.setdefault("auto_include_new", True)
             return b
         bid = list(ref.keys())[0]; opts = ref[bid] or {}
     else: return None
@@ -203,6 +204,7 @@ def _expand_bundle(ref, registry):
     for k in ("patches", "options", "pin", "authority", "auto_include_new"):
         if k in opts: b[k] = opts[k]
         elif k in src: b[k] = src[k]
+    b.setdefault("auto_include_new", True)
     return b if b.get("url") else None
 
 def normalize_v2(raw):
@@ -213,6 +215,7 @@ def normalize_v2(raw):
         entry = {"url": normalize_bundle_url(b.get("url", "")), "label": b.get("label") or bid}
         for k in ("patches", "options", "pin", "authority", "auto_include_new"):
             if k in b: entry[k] = b[k]
+        entry.setdefault("auto_include_new", True)
         registry[bid] = entry
     apps = raw.get("apps") or {}
     cfg = {"auto_include_new_patches": d.get("auto_include_new_patches", True),
@@ -229,7 +232,8 @@ def normalize_v2(raw):
                   "exclude_patches": bd.get("exclude") or [], "options": bd.get("options") or {},
                   "apk_version": ver, "_policy": ver,
                   "fallback_version": bd.get("fallback_version") or app.get("fallback_version") or "",
-                  "auto_include_new": bd.get("auto_include_new", app.get("auto_include_new", False)),
+                  "auto_include_new": bd.get("auto_include_new", app.get("auto_include_new", True)),
+                  "gh_assets": bd.get("gh_assets") or app.get("source", {}).get("assets") or [],
                   "_authorities": [b["label"] for b in bundles if b.get("authority")]}
         if bd.get("profile"): common["_profile"] = bd["profile"]
         if ver.startswith("channel:"):
@@ -1256,8 +1260,13 @@ def heal_patch(apk_path, out_apk, gen_data, per_bundle, label, alias, bundles, k
                     if n.lower() == fl: dropped.append(n); del d[n]; removed = True
         if not removed: return False, applied, dropped, missing
 
-def find_asset(release):
-    for a in release.get("assets", []):
+def find_asset(release, names=None):
+    assets = release.get("assets", [])
+    if names:
+        low = [n.lower() for n in names]
+        for a in assets:
+            if a.get("name", "").lower() in low: return a.get("browser_download_url")
+    for a in assets:
         n = a.get("name", "").lower()
         if "arm64" in n and "universal" in n: return a.get("browser_download_url")
     return None
@@ -1270,18 +1279,18 @@ def classify(r, stable_tag):
     if name.startswith("beta"): return "beta"
     return None
 
-def pick_candidates(releases, channel, latest_stable):
+def pick_candidates(releases, channel, latest_stable, asset_names=None):
     stable_tag = latest_stable.get("tag_name") if latest_stable else None
     stable_ver = parse_ver(stable_tag)
     stable_cand = None
     if latest_stable:
-        url = find_asset(latest_stable)
+        url = find_asset(latest_stable, asset_names)
         if url: stable_cand = (stable_tag, url)
     old_stables, betas, nightlies, older = [], [], [], []
     for r in releases:
         tag = r.get("tag_name") or ""
         if tag == stable_tag: continue
-        url = find_asset(r)
+        url = find_asset(r, asset_names)
         if not url: continue
         entry = (tag, url)
         c = classify(r, stable_tag)
@@ -1352,7 +1361,7 @@ def ensure_apkeditor():
     if not (os.path.exists(jar) and os.path.getsize(jar) > 500_000):
         raise Exception("APKEditor jar download invalid")
     return jar
-
+    
 def strip_permissions_from_apk(apk_path, allowlist, ks_path, ks_password, ks_alias, ks_key_password):
     print(f"\n🔒 Stripping permissions from {os.path.basename(apk_path)}")
     print(f"Allowlist ({len(allowlist)} permissions):")
@@ -1530,7 +1539,9 @@ def build_extra_app(app, alias, ks_fp, notes, cache, force_rebuild=False, releas
             bundle_cfg = v.get("bundles", [])[i] if i < len(v.get("bundles", [])) else {}
             allow = bundle_cfg.get("patches")
             allow_l = {clean_name(x).lower() for x in allow} if allow else None
-            auto_new = bool(bundle_cfg.get("auto_include_new")) or bool(v.get("auto_include_new"))
+            auto_new = bundle_cfg.get("auto_include_new")
+            if auto_new is None: auto_new = v.get("auto_include_new", True)
+            auto_new = bool(auto_new)
             wanted = {}
             for name in sorted((g.get("patches") or {}).keys()):
                 nl = clean_name(name).lower()
@@ -1829,13 +1840,13 @@ def main():
     latest_stable = get_latest_stable("brave/brave-browser")
     apk_cache, notes = {}, []
     for channel in ["stable", "nightly", "beta"]:
-        cands = pick_candidates(brave_releases, channel, latest_stable)
-        if not cands: continue
-        configurable = set(brave_base)
-        if name_patch: configurable.add(name_patch)
-        if clone_patch: configurable.add(clone_patch)
-        auto = compute_auto(info_dh6k, CHANNEL_PKG[channel], config.get("exclude_patches", []), configurable, needs_brave) if config.get("auto_include_new_patches", True) else []
         for variant in [v for v in config["variants"] if v.get("type") == channel]:
+            cands = pick_candidates(brave_releases, channel, latest_stable, variant.get("gh_assets"))
+            if not cands: continue
+            configurable = set(brave_base)
+            if name_patch: configurable.add(name_patch)
+            if clone_patch: configurable.add(clone_patch)
+            auto = compute_auto(info_dh6k, CHANNEL_PKG[channel], config.get("exclude_patches", []), configurable, needs_brave) if config.get("auto_include_new_patches", True) else []
             vid = variant["id"]
             btags = {"dh6k": dh6k_tag, "official": official_tag}
             chash = compute_config_hash(variant)
@@ -1881,7 +1892,7 @@ def main():
                     for g in gen:
                         d = {}
                         for n in sorted((g.get("patches") or {}).keys()):
-                            if n in brave_base: d[n] = brave_base[n]
+                            if n in brave_base: d[n] = dict(brave_base[n])
                             elif n in auto: d[n] = {}
                         per_bundle.append(d)
                 if variant.get("app_name") and n_patch:
@@ -1904,13 +1915,39 @@ def main():
                 notes.append(note)
                 update_cache_entry(cache, vid, {"resolved": channel_latest, "config_hash": chash, "bundles": btags, "status": "success" if ok else "failed", "output": final, "release_tag": release_tag})
                 continue
-            per_bundle = []
-            for g in gen:
-                d = {}
-                for n in sorted((g.get("patches") or {}).keys()):
-                    if n in brave_base: d[n] = brave_base[n]
-                    elif n in auto: d[n] = {}
-                per_bundle.append(d)
+            # ---- Explicit patch lists (from config) or legacy brave_base+auto ----
+            bcfgs = [b for b in (variant.get("bundles") or []) if isinstance(b, dict)]
+            if any(b.get("patches") for b in bcfgs):
+                excl = {clean_name(x).lower() for x in (variant.get("exclude_patches") or [])}
+                per_bundle = []
+                for i, g in enumerate(gen):
+                    bc = bcfgs[i] if i < len(bcfgs) else {}
+                    allow = bc.get("patches")
+                    allow_l = {clean_name(x).lower() for x in allow} if allow else None
+                    auto_new = bc.get("auto_include_new")
+                    if auto_new is None: auto_new = variant.get("auto_include_new", True)
+                    auto_new = bool(auto_new)
+                    wanted = {}
+                    for name in sorted((g.get("patches") or {}).keys()):
+                        nl = clean_name(name).lower()
+                        if allow_l is not None and nl not in allow_l:
+                            if not auto_new: continue
+                            if nl in excl: continue
+                        wanted[name] = {}
+                    per_bundle.append(wanted)
+                for patch_name, opts in (variant.get("options") or {}).items():
+                    pl = clean_name(patch_name).lower()
+                    for i, g in enumerate(gen):
+                        for real in (g.get("patches") or {}):
+                            if clean_name(real).lower() == pl: per_bundle[i].setdefault(real, {}).update(opts)
+            else:
+                per_bundle = []
+                for g in gen:
+                    d = {}
+                    for n in sorted((g.get("patches") or {}).keys()):
+                        if n in brave_base: d[n] = dict(brave_base[n])
+                        elif n in auto: d[n] = {}
+                    per_bundle.append(d)
             if variant.get("app_name") and n_patch:
                 for i, g in enumerate(gen):
                     if n_patch in (g.get("patches") or {}): per_bundle[i][n_patch] = {"appName": variant["app_name"]}; break
@@ -1945,7 +1982,7 @@ def main():
         f.write(head + "\n".join(RESOLUTION) + skip_section + "\n\n" + "".join(notes))
 
     save_cache(cache)
-    print(f"\n📦 Built {len(BUILT)} · Skipped {len(SKIPPED)}")
+    print(f"\n📦 Built {len(BUILT)} · Skipped: {len(SKIPPED)}")
 
     if not glob.glob("build/*-patched.apk"):
         print("\n" + "=" * 60)
