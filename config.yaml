@@ -512,6 +512,7 @@ builds:
     bundles:
       - hxreborn:
           authority: true
+          auto_include_new: false
           patches:
             - AMOLED dark theme
             - Custom accent color
@@ -527,6 +528,7 @@ builds:
             - Unlock profiles
             - Unlock split tunneling
       - kveld9:
+          auto_include_new: false
           patches:
             - Background Sync & JobScheduler Purge
             - DPI Resource Slimmer
